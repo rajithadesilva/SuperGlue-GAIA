@@ -50,17 +50,23 @@ import random
 import numpy as np
 import matplotlib.cm as cm
 import torch
-
+import cv2
+from ultralytics import YOLO
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 from models.matching import Matching
 from models.utils import (compute_pose_error, compute_epipolar_error,
                           estimate_pose, make_matching_plot,
-                          error_colormap, AverageTimer, pose_auc, read_image,
+                          error_colormap, AverageTimer, pose_auc, read_rgb_image, read_image,
                           rotate_intrinsics, rotate_pose_inplane,
-                          scale_intrinsics)
+                          scale_intrinsics, frame2tensor)
 
 torch.set_grad_enabled(False)
 
+MONTH = 'september'
+DESC = 'U-64U-192U-FN-SPBG'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -68,13 +74,19 @@ if __name__ == '__main__':
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument(
-        '--input_pairs', type=str, default='assets/scannet_sample_pairs_with_gt.txt',
+        '--month', type=str, default=f'{MONTH}',
+        help='Month which the data is from')
+    parser.add_argument(
+        '--desc', type=str, default=f'{DESC}',
+        help='Descriptor identifier')
+    parser.add_argument(
+        '--input_pairs', type=str, default=f'assets/{MONTH}_test_pairs_gt.txt',
         help='Path to the list of image pairs')
     parser.add_argument(
-        '--input_dir', type=str, default='assets/scannet_sample_images/',
+        '--input_dir', type=str, default=f'assets/{MONTH}/',
         help='Path to the directory that contains the images')
     parser.add_argument(
-        '--output_dir', type=str, default='dump_match_pairs/',
+        '--output_dir', type=str, default=f'dump_match_pairs/{DESC}/{MONTH}',
         help='Path to the directory in which the .npz results and optionally,'
              'the visualization images are written')
 
@@ -91,10 +103,10 @@ if __name__ == '__main__':
         help='Resize the image after casting uint8 to float')
 
     parser.add_argument(
-        '--superglue', choices={'indoor', 'outdoor'}, default='indoor',
+        '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
-        '--max_keypoints', type=int, default=1024,
+        '--max_keypoints', type=int, default=-1,
         help='Maximum number of keypoints detected by Superpoint'
              ' (\'-1\' keeps all keypoints)')
     parser.add_argument(
@@ -143,6 +155,11 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     print(opt)
 
+    if opt.month:
+        opt.input_pairs = f'assets/{opt.month}_test_pairs_gt.txt'
+        opt.input_dir = f'assets/{opt.month}/'
+        opt.output_dir = f'dump_match_pairs/{opt.desc}/{opt.month}'
+
     assert not (opt.opencv_display and not opt.viz), 'Must use --viz with --opencv_display'
     assert not (opt.opencv_display and not opt.fast_viz), 'Cannot use --opencv_display without --fast_viz'
     assert not (opt.fast_viz and not opt.viz), 'Must use --viz with --fast_viz'
@@ -174,6 +191,7 @@ if __name__ == '__main__':
             raise ValueError(
                 'All pairs should have ground truth info for evaluation.'
                 'File \"{}\" needs 38 valid entries per row'.format(opt.input_pairs))
+    
 
     # Load the SuperPoint and SuperGlue models.
     device = 'cuda' if torch.cuda.is_available() and not opt.force_cpu else 'cpu'
@@ -205,7 +223,12 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
+    yolo = YOLO("./models/weights/yolo.pt").to('cpu')
     timer = AverageTimer(newline=True)
+    epis = []
+
+    conf_matrix_sum = None
+    num_pairs = 0
     for i, pair in enumerate(pairs):
         name0, name1 = pair[:2]
         stem0, stem1 = Path(name0).stem, Path(name1).stem
@@ -271,16 +294,124 @@ if __name__ == '__main__':
 
         if do_match:
             # Perform the matching.
-            pred = matching({'image0': inp0, 'image1': inp1})
+            #'''
+            # Added for YOLO START
+            yoloimg = cv2.imread(str(input_dir / name0))
+            yoloimg = cv2.resize(yoloimg, (640, 640))
+
+            result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False)
+            # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
+            if result[0].masks is not None:
+                masks = np.array(result[0].masks.data.cpu())
+                #combined_mask = np.any(masks, axis=0).astype(np.uint8)
+                #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
+                image0 = cv2.resize(image0, (640, 480))
+                resized_masks0 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
+                for j in range(masks.shape[0]):
+                    resized_masks0[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
+                    resized_masks0[j][resized_masks0[j] == 1] = 255
+                #image0 = cv2.cvtColor(image0,cv2.COLOR_BGR2GRAY)         
+            else: 
+                continue
+
+            '''
+            background = yolo.predict(yoloimg,conf=0.2, classes=[0,1,2], verbose=False)
+            if background[0].masks is not None:
+                masks = np.array(background[0].masks.data.cpu())
+                resized_masks0 = np.any(masks, axis=0).astype(np.uint8)
+                resized_masks0 = cv2.resize(resized_masks0, (128, 128))
+                resized_masks0[resized_masks0 == 1] = 255 
+            '''
+            yoloimg = yoloimg = cv2.imread(str(input_dir / name1))
+            yoloimg = cv2.resize(yoloimg, (640, 640))
+
+            result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False) 
+            # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
+            if result[0].masks is not None:
+                masks = np.array(result[0].masks.data.cpu())
+                #combined_mask = np.any(masks, axis=0).astype(np.uint8)
+                #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
+                image1 = cv2.resize(image1, (640, 480))
+                resized_masks1 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
+                for j in range(masks.shape[0]):
+                    resized_masks1[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
+                    resized_masks1[j][resized_masks1[j] == 1] = 255
+                #image1 = cv2.cvtColor(image1,cv2.COLOR_BGR2GRAY)
+            else: 
+                continue
+            
+            '''
+            background = yolo.predict(yoloimg,conf=0.2, classes=[0,1,2], verbose=False)
+            if background[0].masks is not None:
+                masks = np.array(background[0].masks.data.cpu())
+                resized_masks1 = np.any(masks, axis=0).astype(np.uint8)
+                resized_masks1 = cv2.resize(resized_masks1, (128, 128))
+                resized_masks1[resized_masks1 == 1] = 255 
+            '''
+
+            inp0 = frame2tensor(image0, device)
+            inp1 = frame2tensor(image1, device)
+            timer.update('YOLO')
+            # Added for YOLO END
+            #Note: Utils line 428 was added to set z=0.0
+            #'''
+            pred = matching({'image0': inp0, 'image1': inp1}, resized_masks0, resized_masks1)
             pred = {k: v[0].cpu().numpy() for k, v in pred.items()}
             kpts0, kpts1 = pred['keypoints0'], pred['keypoints1']
             matches, conf = pred['matches0'], pred['matching_scores0']
+            indexes0 = pred['indexes0']
+            indexes1 = pred['indexes1']
             timer.update('matcher')
-
+            
             # Write the matches to disk.
             out_matches = {'keypoints0': kpts0, 'keypoints1': kpts1,
-                           'matches': matches, 'match_confidence': conf}
+                           'matches': matches, 'match_confidence': conf,
+                            'indexes0':indexes0, 'indexes1':indexes1}
             np.savez(str(matches_path), **out_matches)
+
+            # New Code: Calculate and save confusion matrix
+            # True labels: whether the keypoints in image0 and corresponding match in image1 are foreground or background
+            valid_matches = matches != -1  # Matches that are valid (not -1)
+            
+            matched_indexes0 = indexes0[valid_matches]  # Keypoints in image0 that have valid matches
+            matched_indexes1 = matches[valid_matches]   # Corresponding keypoint indices in image1 from the matches
+            matched_indexes1_labels = indexes1[matched_indexes1]  # Get labels of the matched keypoints in image1
+
+            # True if both matched keypoints in image0 and image1 are in semantic (foreground) regions
+            true_labels0 = matched_indexes0 >= 0
+            true_labels1 = matched_indexes1_labels >= 0
+
+            # Predicted labels: Consider matched keypoints as valid if they are in the semantic regions in both images
+            predicted_labels = true_labels0 & true_labels1
+
+            # Calculate confusion matrix
+            conf_matrix = confusion_matrix(true_labels0, predicted_labels, labels=[0, 1])
+
+            # Accumulate confusion matrices
+            if conf_matrix_sum is None:
+                conf_matrix_sum = conf_matrix
+            else:
+                conf_matrix_sum += conf_matrix
+            num_pairs += 1
+
+            # Create the output directory for confusion matrices if it does not exist
+            conf_output_dir = Path(output_dir) / "conf_matrices"
+            conf_output_dir.mkdir(exist_ok=True, parents=True)
+
+            # Function to save confusion matrix as an image
+            def save_confusion_matrix(conf_matrix, title, image_path, cmap='Blues'):
+                plt.figure(figsize=(5, 4))
+                sns.heatmap(conf_matrix, annot=True, cmap=cmap, fmt='g')
+                plt.title(title)
+                plt.xlabel('Predicted Label')
+                plt.ylabel('True Label')
+                plt.tight_layout()
+                plt.savefig(image_path)
+                plt.close()
+
+            # Save confusion matrices as images for each pair
+            save_confusion_matrix(conf_matrix, "Confusion Matrix for Matches in Image 0",
+                                conf_output_dir / f"{stem0}_{stem1}_conf_matrix_image0.png")
 
         # Keep the matching keypoints.
         valid = matches > -1
@@ -313,7 +444,8 @@ if __name__ == '__main__':
                 T_0to1 = cam1_T_cam0
 
             epi_errs = compute_epipolar_error(mkpts0, mkpts1, T_0to1, K0, K1)
-            correct = epi_errs < 5e-4
+            epis.append(np.mean(epi_errs))
+            correct = epi_errs < 5e-4 # 2e-3 5e-4
             num_correct = np.sum(correct)
             precision = np.mean(correct) if len(correct) > 0 else 0
             matching_score = num_correct / len(kpts0) if len(kpts0) > 0 else 0
@@ -398,6 +530,14 @@ if __name__ == '__main__':
             timer.update('viz_eval')
 
         timer.print('Finished pair {:5} of {:5}'.format(i, len(pairs)))
+
+    # After processing all pairs, compute and save the average confusion matrix
+    if num_pairs > 0:
+        avg_conf_matrix = conf_matrix_sum / num_pairs
+
+        # Save the average confusion matrices with a different colormap ('viridis')
+        save_confusion_matrix(avg_conf_matrix, "Average Confusion Matrix for Matches in Image 0",
+                            conf_output_dir / "average_conf_matrix_image0.png", cmap='viridis')
 
     if opt.eval:
         # Collate the results into a final table and print to terminal.

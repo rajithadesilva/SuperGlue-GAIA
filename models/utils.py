@@ -171,6 +171,22 @@ class VideoStreamer:
         grayim = cv2.resize(
             grayim, (w_new, h_new), interpolation=self.interp)
         return grayim
+    
+    def load_rgb_image(self, impath):
+        """ Read image as RGB and resize to img_size.
+        Inputs
+            impath: Path to input image.
+        Returns
+            rgbim: numpy array sized H x W X 3.
+        """
+        rgbim = cv2.imread(impath)
+        if rgbim is None:
+            raise Exception('Error reading image %s' % impath)
+        w, h = rgbim.shape[1], rgbim.shape[0]
+        w_new, h_new = process_resize(w, h, self.resize)
+        rgbim = cv2.resize(
+            rgbim, (w_new, h_new), interpolation=self.interp)
+        return rgbim
 
     def next_frame(self):
         """ Return the next frame, and increment internal counter.
@@ -203,10 +219,10 @@ class VideoStreamer:
             w_new, h_new = process_resize(w, h, self.resize)
             image = cv2.resize(image, (w_new, h_new),
                                interpolation=self.interp)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            #image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
             image_file = str(self.listing[self.i])
-            image = self.load_image(image_file)
+            image = self.load_rgb_image(image_file) # Updated Load funciton
         self.i = self.i + 1
         return (image, True)
 
@@ -259,6 +275,27 @@ def process_resize(w, h, resize):
 def frame2tensor(frame, device):
     return torch.from_numpy(frame/255.).float()[None, None].to(device)
 
+def read_rgb_image(path, device, resize, rotation, resize_float):
+    image = cv2.imread(str(path))
+    
+    if image is None:
+        return None, None, None
+    w, h = image.shape[1], image.shape[0]
+    w_new, h_new = process_resize(w, h, resize)
+    scales = (float(w) / float(w_new), float(h) / float(h_new))
+
+    if resize_float:
+        image = cv2.resize(image.astype('float32'), (w_new, h_new, 3))
+    else:
+        image = cv2.resize(image, (w_new, h_new)).astype('float32')
+
+    if rotation != 0:
+        image = np.rot90(image, k=rotation)
+        if rotation % 2:
+            scales = scales[::-1]
+    
+    inp = None# frame2tensor(image, device)
+    return image, inp, scales
 
 def read_image(path, device, resize, rotation, resize_float):
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
@@ -388,6 +425,7 @@ def angle_error_vec(v1, v2):
 def compute_pose_error(T_0to1, R, t):
     R_gt = T_0to1[:3, :3]
     t_gt = T_0to1[:3, 3]
+    t[2] = 0.0 # Added by Rajitha, In GT z transition is forced to 0
     error_t = angle_error_vec(t, t_gt)
     error_t = np.minimum(error_t, 180 - error_t)  # ambiguity of E estimation
     error_R = angle_error_mat(R, R_gt)
@@ -412,7 +450,7 @@ def pose_auc(errors, thresholds):
 # --- VISUALIZATION ---
 
 
-def plot_image_pair(imgs, dpi=100, size=6, pad=.5):
+def plot_image_pair_horizontal(imgs, dpi=100, size=6, pad=.5):
     n = len(imgs)
     assert n == 2, 'number of images must be two'
     figsize = (size*n, size*3/4) if size is not None else None
@@ -425,6 +463,18 @@ def plot_image_pair(imgs, dpi=100, size=6, pad=.5):
             spine.set_visible(False)
     plt.tight_layout(pad=pad)
 
+def plot_image_pair(imgs, dpi=100, size=6, pad=.5):
+    n = len(imgs)
+    assert n == 2, 'number of images must be two'
+    figsize = (size*3/4, size*n*0.5) if size is not None else None  # Adjust for vertical layout
+    _, ax = plt.subplots(n, 1, figsize=figsize, dpi=dpi)  # Change to n rows, 1 column
+    for i in range(n):
+        ax[i].imshow(imgs[i], cmap=plt.get_cmap('gray'), vmin=0, vmax=255)
+        ax[i].get_yaxis().set_ticks([])
+        ax[i].get_xaxis().set_ticks([])
+        for spine in ax[i].spines.values():  # remove frame
+            spine.set_visible(False)
+    plt.tight_layout(pad=pad)
 
 def plot_keypoints(kpts0, kpts1, color='w', ps=2):
     ax = plt.gcf().axes
@@ -480,7 +530,6 @@ def make_matching_plot(image0, image1, kpts0, kpts1, mkpts0, mkpts1,
     plt.savefig(str(path), bbox_inches='tight', pad_inches=0)
     plt.close()
 
-
 def make_matching_plot_fast(image0, image1, kpts0, kpts1, mkpts0,
                             mkpts1, color, text, path=None,
                             show_keypoints=False, margin=10,
@@ -488,12 +537,170 @@ def make_matching_plot_fast(image0, image1, kpts0, kpts1, mkpts0,
                             small_text=[]):
     H0, W0 = image0.shape
     H1, W1 = image1.shape
+    H = H0 + H1 + margin  # Total height by stacking
+    W = max(W0, W1)       # Width is the max of both
+
+    # Create an empty output image with the correct dimensions
+    out = 255*np.ones((H, W), np.uint8)
+    out[:H0, :W0] = image0  # Place image0 at the top
+    out[H0+margin:H0+margin+H1, :W1] = image1  # Place image1 at the bottom
+    out = np.stack([out]*3, -1)
+    
+    if show_keypoints:
+        kpts0, kpts1 = np.round(kpts0).astype(int), np.round(kpts1).astype(int)
+        white = (255, 255, 255)
+        black = (0, 0, 0)
+        for x, y in kpts0:
+            cv2.circle(out, (x, y), 2, black, -1, lineType=cv2.LINE_AA)
+            cv2.circle(out, (x, y), 1, white, -1, lineType=cv2.LINE_AA)
+        for x, y in kpts1:
+            cv2.circle(out, (x, y + H0 + margin), 2, black, -1,  # Shift y-coordinates
+                       lineType=cv2.LINE_AA)
+            cv2.circle(out, (x, y + H0 + margin), 1, white, -1,
+                       lineType=cv2.LINE_AA)
+
+    mkpts0, mkpts1 = np.round(mkpts0).astype(int), np.round(mkpts1).astype(int)
+    color = (np.array(color[:, :3])*255).astype(int)[:, ::-1]
+    for (x0, y0), (x1, y1), c in zip(mkpts0, mkpts1, color):
+        c = c.tolist()
+        cv2.line(out, (x0, y0), (x1, y1 + H0 + margin),  # Shift y1 to match vertical stacking
+                 color=c, thickness=1, lineType=cv2.LINE_AA)
+        # Display line end-points as circles
+        cv2.circle(out, (x0, y0), 2, c, -1, lineType=cv2.LINE_AA)
+        cv2.circle(out, (x1, y1 + H0 + margin), 2, c, -1,
+                   lineType=cv2.LINE_AA)
+
+    # Scale factor for consistent visualization across scales.
+    sc = min(W / 640., 2.0)
+
+    # Big text.
+    Ht = int(30 * sc)  # Text height
+    txt_color_fg = (255, 255, 255)
+    txt_color_bg = (0, 0, 0)
+    for i, t in enumerate(text):
+        cv2.putText(out, t, (int(8*sc), Ht*(i+1)), cv2.FONT_HERSHEY_DUPLEX,
+                    1.0*sc, txt_color_bg, 2, cv2.LINE_AA)
+        cv2.putText(out, t, (int(8*sc), Ht*(i+1)), cv2.FONT_HERSHEY_DUPLEX,
+                    1.0*sc, txt_color_fg, 1, cv2.LINE_AA)
+
+    # Small text.
+    Ht = int(18 * sc)  # Text height
+    for i, t in enumerate(reversed(small_text)):
+        cv2.putText(out, t, (int(8*sc), int(H-Ht*(i+.6))), cv2.FONT_HERSHEY_DUPLEX,
+                    0.5*sc, txt_color_bg, 2, cv2.LINE_AA)
+        cv2.putText(out, t, (int(8*sc), int(H-Ht*(i+.6))), cv2.FONT_HERSHEY_DUPLEX,
+                    0.5*sc, txt_color_fg, 1, cv2.LINE_AA)
+
+    if path is not None:
+        cv2.imwrite(str(path), out)
+
+    if opencv_display:
+        cv2.imshow(opencv_title, out)
+        cv2.waitKey(1)
+
+    return out
+
+# Apply the mask with transparency and darkening
+def apply_mask(image, mask, alpha):
+    # Reshape the mask to 480x640
+    mask_resized = cv2.resize(mask, (640, 480), interpolation=cv2.INTER_NEAREST)
+
+    # Convert mask from single-channel to three-channel for RGB image
+    mask_3d = np.repeat(mask_resized[:, :, np.newaxis], 3, axis=2)
+
+    # Darken areas where mask is 0, and leave areas where mask is 1 unchanged
+    darkened_image = (image * alpha).astype(np.uint8)
+    masked_image = np.where(mask_3d == 1, image, darkened_image)
+
+    return masked_image
+
+    
+def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpts0,
+                            mkpts1, color, text, path=None,
+                            show_keypoints=False, margin=10,
+                            opencv_display=False, opencv_title='',
+                            small_text=[], alpha=0.35):
+    H0, W0, _ = image0.shape
+    H1, W1, _ = image1.shape
+    H = H0 + H1 + margin  # Total height by stacking
+    W = max(W0, W1)       # Width is the max of both
+
+    # Apply mask to both images
+    image0 = apply_mask(image0, mask0, alpha)
+    image1 = apply_mask(image1, mask1, alpha)
+
+    # Create an empty output image with the correct dimensions
+    out = 255*np.ones((H, W, 3), np.uint8)
+    out[:H0, :W0, :] = image0  # Place image0 at the top
+    out[H0+margin:H0+margin+H1, :W1, :] = image1  # Place image1 at the bottom
+    
+    if show_keypoints:
+        kpts0, kpts1 = np.round(kpts0).astype(int), np.round(kpts1).astype(int)
+        white = (255, 255, 255)
+        black = (0, 0, 0)
+        for x, y in kpts0:
+            cv2.circle(out, (x, y), 2, black, -1, lineType=cv2.LINE_AA)
+            cv2.circle(out, (x, y), 1, white, -1, lineType=cv2.LINE_AA)
+        for x, y in kpts1:
+            cv2.circle(out, (x, y + H0 + margin), 2, black, -1,  # Shift y-coordinates
+                       lineType=cv2.LINE_AA)
+            cv2.circle(out, (x, y + H0 + margin), 1, white, -1,
+                       lineType=cv2.LINE_AA)
+
+    mkpts0, mkpts1 = np.round(mkpts0).astype(int), np.round(mkpts1).astype(int)
+    color = (np.array(color[:, :3])*255).astype(int)[:, ::-1]
+    for (x0, y0), (x1, y1), c in zip(mkpts0, mkpts1, color):
+        c = c.tolist()
+        cv2.line(out, (x0, y0), (x1, y1 + H0 + margin),  # Shift y1 to match vertical stacking
+                 color=c, thickness=1, lineType=cv2.LINE_AA)
+        # Display line end-points as circles
+        cv2.circle(out, (x0, y0), 2, c, -1, lineType=cv2.LINE_AA)
+        cv2.circle(out, (x1, y1 + H0 + margin), 2, c, -1,
+                   lineType=cv2.LINE_AA)
+
+    # Scale factor for consistent visualization across scales.
+    sc = min(W / 640., 2.0)
+
+    # Big text.
+    Ht = int(30 * sc)  # Text height
+    txt_color_fg = (255, 255, 255)
+    txt_color_bg = (0, 0, 0)
+    for i, t in enumerate(text):
+        cv2.putText(out, t, (int(8*sc), Ht*(i+1)), cv2.FONT_HERSHEY_DUPLEX,
+                    1.0*sc, txt_color_bg, 2, cv2.LINE_AA)
+        cv2.putText(out, t, (int(8*sc), Ht*(i+1)), cv2.FONT_HERSHEY_DUPLEX,
+                    1.0*sc, txt_color_fg, 1, cv2.LINE_AA)
+
+    # Small text.
+    Ht = int(18 * sc)  # Text height
+    for i, t in enumerate(reversed(small_text)):
+        cv2.putText(out, t, (int(8*sc), int(H-Ht*(i+.6))), cv2.FONT_HERSHEY_DUPLEX,
+                    0.5*sc, txt_color_bg, 2, cv2.LINE_AA)
+        cv2.putText(out, t, (int(8*sc), int(H-Ht*(i+.6))), cv2.FONT_HERSHEY_DUPLEX,
+                    0.5*sc, txt_color_fg, 1, cv2.LINE_AA)
+
+    if path is not None:
+        cv2.imwrite(str(path), out)
+
+    if opencv_display:
+        cv2.imshow(opencv_title, out)
+        cv2.waitKey(1)
+
+    return out
+
+def make_matching_plot_fast_horizontal(image0, image1, kpts0, kpts1, mkpts0,
+                            mkpts1, color, text, path=None,
+                            show_keypoints=False, margin=10,
+                            opencv_display=False, opencv_title='',
+                            small_text=[]):
+    H0, W0, _ = image0.shape
+    H1, W1, _ = image1.shape
     H, W = max(H0, H1), W0 + W1 + margin
 
-    out = 255*np.ones((H, W), np.uint8)
-    out[:H0, :W0] = image0
-    out[:H1, W0+margin:] = image1
-    out = np.stack([out]*3, -1)
+    out = 255*np.ones((H, W, 3), np.uint8)
+    out[:H0, :W0, :] = image0
+    out[:H1, W0+margin:, :] = image1
+    #out = np.stack([out]*3, -1)
 
     if show_keypoints:
         kpts0, kpts1 = np.round(kpts0).astype(int), np.round(kpts1).astype(int)
@@ -548,6 +755,95 @@ def make_matching_plot_fast(image0, image1, kpts0, kpts1, mkpts0,
         cv2.waitKey(1)
 
     return out
+
+def DimSqueeze(arr):
+    if arr.dim() == 1:
+        return arr.shape[0]
+    else:
+        return arr.shape[1]
+    
+def concatenate_dictionaries(dict1, dict2):
+    """
+    Concatenates values from two dictionaries. If a key is present in both, it concatenates the values.
+    Supports lists, torch.Tensors, and strings. For other types, it raises a ValueError.
+
+    :param dict1: First dictionary
+    :param dict2: Second dictionary
+    :return: A new dictionary with concatenated values for common keys
+    """
+    result = {}
+
+    # Iterate over all unique keys from both dictionaries
+    for key in set(dict1) | set(dict2):
+        if key in dict1 and key in dict2:
+            # Handle concatenation if the key exists in both dictionaries
+            if isinstance(dict1[key], list) and isinstance(dict2[key], list):
+                # Concatenate lists
+                result[key] = dict1[key] + dict2[key]
+            elif isinstance(dict1[key], torch.Tensor) and isinstance(dict2[key], torch.Tensor):
+                # Concatenate torch tensors
+                result[key] = torch.cat((dict1[key], dict2[key]), dim=0)
+            elif isinstance(dict1[key], str) and isinstance(dict2[key], str):
+                # Concatenate strings
+                result[key] = dict1[key] + dict2[key]
+            else:
+                # Raise an error for unsupported types
+                raise ValueError(f"Unsupported type for key {key}: {type(dict1[key])}")
+        elif key in dict1:
+            # If the key only exists in dict1, just copy it
+            result[key] = dict1[key]
+        else:
+            # If the key only exists in dict2, just copy it
+            result[key] = dict2[key]
+
+    return result
+    
+def reconstruct_predictions(pred, indexes0, indexes1, pred_background=None, pred_semantic=None):
+    """
+    Reconstruct the original prediction dictionary to have all the matches
+    in the same format as the original keypoints, descriptors, and scores.
+    Works even if pred_background or pred_semantic is missing (None).
+    """
+    # Initialize placeholders with the same size as the original data
+    num_keypoints0 = indexes0.shape[0]
+    num_keypoints1 = indexes1.shape[0]
+    
+    matches0 = -torch.ones(num_keypoints0, dtype=torch.long, device=indexes0.device)
+    matches1 = -torch.ones(num_keypoints1, dtype=torch.long, device=indexes1.device)
+    matching_scores0 = torch.zeros(num_keypoints0, device=indexes0.device)
+    matching_scores1 = torch.zeros(num_keypoints1, device=indexes1.device)
+    
+    # Separate indexes for background and semantic components
+    bg_indexes0 = torch.where(indexes0 == -1)[0]
+    bg_indexes1 = torch.where(indexes1 == -1)[0]
+    sem_indexes0 = torch.where(indexes0 != -1)[0]
+    sem_indexes1 = torch.where(indexes1 != -1)[0]
+    
+    # If pred_background is provided, update matches and scores for background
+    if pred_background is not None:
+        if 'matches0' in pred_background:
+            matches0[bg_indexes0] = pred_background['matches0'].squeeze(0)
+            matching_scores0[bg_indexes0] = pred_background['matching_scores0'].squeeze(0)
+        if 'matches1' in pred_background:
+            matches1[bg_indexes1] = pred_background['matches1'].squeeze(0)
+            matching_scores1[bg_indexes1] = pred_background['matching_scores1'].squeeze(0)
+    
+    # If pred_semantic is provided, update matches and scores for semantic
+    if pred_semantic is not None:
+        if 'matches0' in pred_semantic:
+            matches0[sem_indexes0] = pred_semantic['matches0'].squeeze(0)
+            matching_scores0[sem_indexes0] = pred_semantic['matching_scores0'].squeeze(0)
+        if 'matches1' in pred_semantic:
+            matches1[sem_indexes1] = pred_semantic['matches1'].squeeze(0)
+            matching_scores1[sem_indexes1] = pred_semantic['matching_scores1'].squeeze(0)
+    
+    # Add the reconstructed matches and matching scores back to the pred dictionary
+    pred['matches0'] = matches0.unsqueeze(0)
+    pred['matches1'] = matches1.unsqueeze(0)
+    pred['matching_scores0'] = matching_scores0.unsqueeze(0)
+    pred['matching_scores1'] = matching_scores1.unsqueeze(0)
+    
+    return pred
 
 
 def error_colormap(x):

@@ -85,7 +85,7 @@ if __name__ == '__main__':
              'dimension, if -1, do not resize')
 
     parser.add_argument(
-        '--superglue', choices={'indoor', 'outdoor'}, default='indoor',
+        '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
         '--max_keypoints', type=int, default=-1,
@@ -245,12 +245,18 @@ if __name__ == '__main__':
             elif key == 'k':
                 opt.show_keypoints = not opt.show_keypoints
 
+        # Update last_data and last_frame for the next iteration
+        last_data = {k+'0': pred[k+'1'] for k in keys}
+        last_data['image0'] = frame_tensor
+        last_frame = frame
+        last_image_id = (vs.i - 1)
+
         timer.update('viz')
         timer.print()
 
         if opt.output_dir is not None:
-            #stem = 'matches_{:06}_{:06}'.format(last_image_id, vs.i-1)
-            stem = 'matches_{:06}_{:06}'.format(stem0, stem1)
+            stem = 'matches_{:06}_{:06}'.format(last_image_id, vs.i-1)
+            #stem = 'matches_{:06}_{:06}'.format(stem0, stem1)
             out_file = str(Path(opt.output_dir, stem + '.png'))
             print('\nWriting image to {}'.format(out_file))
             cv2.imwrite(out_file, out)

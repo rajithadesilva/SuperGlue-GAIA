@@ -43,6 +43,9 @@
 from pathlib import Path
 import torch
 from torch import nn
+import numpy as np
+
+ENCDIM = 64
 
 def simple_nms(scores, nms_radius: int):
     """ Fast Non-maximum suppression to remove nearby points """
@@ -91,6 +94,112 @@ def sample_descriptors(keypoints, descriptors, s: int = 8):
         descriptors.reshape(b, c, -1), p=2, dim=1)
     return descriptors
 
+class LinearAutoencoder(nn.Module):
+    def __init__(self, input_dim=256, bottleneck_dim=256-ENCDIM):
+        super(LinearAutoencoder, self).__init__()
+        self.encoder = nn.Sequential(nn.Linear(input_dim, bottleneck_dim))
+        self.decoder = nn.Sequential(nn.Linear(bottleneck_dim, input_dim))
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
+    
+class LinearEncoder(nn.Module):
+    def __init__(self, input_dim=256, bottleneck_dim=256-ENCDIM):
+        super(LinearEncoder, self).__init__()
+        self.encoder = nn.Sequential(nn.Linear(input_dim, bottleneck_dim))
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        return encoded
+    
+class EncoderDecoder(nn.Module):
+    def __init__(self, encoded_dim=ENCDIM):
+        super(EncoderDecoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(128 * 16 * 16, encoded_dim)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(encoded_dim, 128 * 16 * 16),
+            nn.ReLU(),
+            nn.Unflatten(1, (128, 16, 16)),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return encoded, decoded
+
+# Define the Encoder-Only Network
+class Encoder(nn.Module):
+    def __init__(self, encoded_dim=ENCDIM):
+        super(Encoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(128 * 16 * 16, encoded_dim)
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        return encoded
+
+def find_nearest_masks_for_keypoints(masks, keypoints):
+    N = masks.shape[0]
+    result_indices = []
+    points_with_255 = []
+
+    for i in range(N):
+            # Get coordinates of all points with value 255 in the current mask
+            points_with_255.append(np.argwhere(masks[i] == 255))
+
+    for keypoint in keypoints:
+        x, y = keypoint
+        min_distance = float('inf')
+        nearest_mask_index = -1
+        
+        for i in range(N):            
+            if points_with_255[i].size == 0:
+                # If there are no points with 255 in this mask, skip it
+                continue
+            
+            # Calculate the squared Euclidean distance to the keypoint for each point with value 255
+            distances = np.sqrt((points_with_255[i][:, 0] - y) ** 2 + (points_with_255[i][:, 1] - x) ** 2)
+            
+            # Find the minimum distance in this mask
+            min_dist_in_mask = np.min(distances)
+            
+            # Update the nearest mask and distance if the current one is closer
+            if min_dist_in_mask < min_distance:
+                min_distance = min_dist_in_mask
+                nearest_mask_index = i
+        
+        # Store the nearest mask index for the current keypoint
+        if min_distance < 2.0:
+            result_indices.append(nearest_mask_index)
+        else:
+            result_indices.append(-1)
+    
+    return np.array(result_indices)
 
 class SuperPoint(nn.Module):
     """SuperPoint Convolutional Detector and Descriptor
@@ -141,8 +250,35 @@ class SuperPoint(nn.Module):
             raise ValueError('\"max_keypoints\" must be positive or \"-1\"')
 
         print('Loaded SuperPoint model')
+        #'''
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        self.LinearAutoencoder = LinearAutoencoder()
+        self.LinearAutoencoder.load_state_dict(torch.load(f'./models/weights/{ENCDIM}_superpoint_encoder.pth'))
+        self.LinearAutoencoder.to(self.device)
+        self.LinearEncoder = LinearEncoder()
+        autoencoder_state_dict = self.LinearAutoencoder.encoder.state_dict()
+        encoder_state_dict = {}
+        for key in autoencoder_state_dict:
+            # Change key names from "0.weight" to "encoder.0.weight"
+            new_key = 'encoder.' + key
+            encoder_state_dict[new_key] = autoencoder_state_dict[key]
+        # Load the modified state_dict into LinearEncoder
+        self.LinearEncoder.load_state_dict(encoder_state_dict)
+        self.LinearEncoder.to(self.device)
 
-    def forward(self, data):
+        print('Loaded SuperPoint Linear Autoencoder model')
+        
+        self.encdec = EncoderDecoder()
+        self.encdec.load_state_dict(torch.load(f'./models/weights/{ENCDIM}_BN.pth'))
+        self.encdec.to(self.device)
+
+        self.semenc = Encoder().to(self.device)
+        self.semenc.encoder.load_state_dict(self.encdec.encoder.state_dict())
+
+        print('Loaded Semantic Encoder model')
+        #'''
+    def forward(self, data, masks):
         """ Compute keypoints, scores, descriptors for image """
         # Shared Encoder
         x = self.relu(self.conv1a(data['image']))
@@ -190,13 +326,54 @@ class SuperPoint(nn.Module):
         cDa = self.relu(self.convDa(x))
         descriptors = self.convDb(cDa)
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
-
-        # Extract descriptors
         descriptors = [sample_descriptors(k[None], d[None], 8)[0]
-                       for k, d in zip(keypoints, descriptors)]
+               for k, d in zip(keypoints, descriptors)]
+        
+        
+        #Modified to fit semantics from here
+        if masks is not None:
+            mask_indexes = find_nearest_masks_for_keypoints(masks, keypoints[0].cpu().numpy())
+           
+            semantic_descriptors = []
+            for idx, desc in enumerate(descriptors[0].T):
+                if mask_indexes[idx]>= 0:
+                    desc = desc.to(self.device)
+                    reduced_desc = self.LinearEncoder(desc)
+                    #reduced_desc = torch.nn.functional.normalize(reduced_desc, p=2, dim=0)
+                    reduced_desc = reduced_desc.cpu().numpy()
 
+                    sem_background = masks[mask_indexes[idx]]
+                    sem_background = torch.tensor(sem_background, dtype=torch.float32).to(self.device)
+                    encoded = self.semenc(sem_background.unsqueeze(0).unsqueeze(0))
+                    #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
+                    bottleneck_vector = (encoded.cpu().numpy())
+                    semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
+                else:
+                    semantic_descriptors.append(desc.cpu().numpy())
+                    '''
+                    desc = desc.to(self.device)
+                    reduced_desc = self.LinearEncoder(desc)
+                    #reduced_desc = torch.nn.functional.normalize(reduced_desc, p=2, dim=0)
+                    reduced_desc = reduced_desc.cpu().numpy()
+
+                    sem_background = np.any(masks, axis=0).astype(np.uint8)
+                    sem_background = torch.tensor(sem_background, dtype=torch.float32).to(self.device)
+                    encoded = self.semenc(sem_background.unsqueeze(0).unsqueeze(0))
+                    #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
+                    bottleneck_vector = (encoded.cpu().numpy())
+                    semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
+                    '''
+            mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
+            descriptors = np.array(semantic_descriptors,np.float32)
+            descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).T.unsqueeze(0) #for unbranched
+            #descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for branched
+            descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+
+        #Modified to fit semantics until here
+        #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
         return {
             'keypoints': keypoints,
             'scores': scores,
             'descriptors': descriptors,
+            'indexes' : mask_indexes,
         }
