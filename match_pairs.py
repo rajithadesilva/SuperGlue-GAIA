@@ -65,8 +65,8 @@ from models.utils import (compute_pose_error, compute_epipolar_error,
 
 torch.set_grad_enabled(False)
 
-MONTH = 'september'
-DESC = 'U-64U-192U-FN-SPBG'
+MONTH = 'march'
+DESC = 'U-64U-196U-FN-SPBG'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -229,6 +229,7 @@ if __name__ == '__main__':
 
     conf_matrix_sum = None
     num_pairs = 0
+    rp = [0.0, 0.0]
     for i, pair in enumerate(pairs):
         name0, name1 = pair[:2]
         stem0, stem1 = Path(name0).stem, Path(name1).stem
@@ -254,6 +255,55 @@ if __name__ == '__main__':
                 kpts0, kpts1 = results['keypoints0'], results['keypoints1']
                 matches, conf = results['matches'], results['match_confidence']
                 do_match = False
+
+                #'''
+                # New Code: Calculate and save confusion matrix
+                # True labels: whether the keypoints in image0 and corresponding match in image1 are foreground or background
+                indexes0 = results['indexes0']
+                indexes1 = results['indexes1']
+                valid_matches = matches != -1  # Matches that are valid (not -1)
+                
+                matched_indexes0 = indexes0[valid_matches]  # Keypoints in image0 that have valid matches
+                matched_indexes1 = matches[valid_matches]   # Corresponding keypoint indices in image1 from the matches
+                matched_indexes1_labels = indexes1[matched_indexes1]  # Get labels of the matched keypoints in image1
+
+                # True if both matched keypoints in image0 and image1 are in semantic (foreground) regions
+                true_labels0 = matched_indexes0 >= 0
+                true_labels1 = matched_indexes1_labels >= 0
+
+                # Predicted labels: Consider matched keypoints as valid if they are in the semantic regions in both images
+                predicted_labels = true_labels0 & true_labels1
+
+                # Calculate confusion matrix
+                conf_matrix = confusion_matrix(true_labels0, predicted_labels, labels=[0, 1])
+
+                # Accumulate confusion matrices
+                if conf_matrix_sum is None:
+                    conf_matrix_sum = conf_matrix
+                else:
+                    conf_matrix_sum += conf_matrix
+                num_pairs += 1
+
+                # Create the output directory for confusion matrices if it does not exist
+                conf_output_dir = Path(output_dir) / "conf_matrices"
+                conf_output_dir.mkdir(exist_ok=True, parents=True)
+
+                # Function to save confusion matrix as an image
+                def save_confusion_matrix(conf_matrix, title, image_path, cmap='Blues'):
+                    plt.figure(figsize=(5, 4))
+                    sns.heatmap(conf_matrix, annot=True, cmap=cmap, fmt='g')
+                    plt.title(title)
+                    plt.xlabel('Predicted Label')
+                    plt.ylabel('True Label')
+                    plt.tight_layout()
+                    plt.savefig(image_path)
+                    plt.close()
+
+                # Save confusion matrices as images for each pair
+                save_confusion_matrix(conf_matrix, "Confusion Matrix for Matches in Image 0",
+                                    conf_output_dir / f"{stem0}_{stem1}_conf_matrix_image0.png")
+                #'''
+
             if opt.eval and eval_path.exists():
                 try:
                     results = np.load(eval_path)
@@ -265,6 +315,7 @@ if __name__ == '__main__':
                 num_correct = results['num_correct']
                 epi_errs = results['epipolar_errors']
                 do_eval = False
+
             if opt.viz and viz_path.exists():
                 do_viz = False
             if opt.viz and opt.eval and viz_eval_path.exists():
@@ -296,61 +347,35 @@ if __name__ == '__main__':
             # Perform the matching.
             #'''
             # Added for YOLO START
+            resized_masks0 = None
+            resized_masks1 = None
+
             yoloimg = cv2.imread(str(input_dir / name0))
             yoloimg = cv2.resize(yoloimg, (640, 640))
-
-            result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False)
+            result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False)
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = np.array(result[0].masks.data.cpu())
                 #combined_mask = np.any(masks, axis=0).astype(np.uint8)
                 #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
-                image0 = cv2.resize(image0, (640, 480))
                 resized_masks0 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
                 for j in range(masks.shape[0]):
                     resized_masks0[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
-                    resized_masks0[j][resized_masks0[j] == 1] = 255
-                #image0 = cv2.cvtColor(image0,cv2.COLOR_BGR2GRAY)         
-            else: 
-                continue
+                    resized_masks0[j][resized_masks0[j] == 1] = 255  
 
-            '''
-            background = yolo.predict(yoloimg,conf=0.2, classes=[0,1,2], verbose=False)
-            if background[0].masks is not None:
-                masks = np.array(background[0].masks.data.cpu())
-                resized_masks0 = np.any(masks, axis=0).astype(np.uint8)
-                resized_masks0 = cv2.resize(resized_masks0, (128, 128))
-                resized_masks0[resized_masks0 == 1] = 255 
-            '''
-            yoloimg = yoloimg = cv2.imread(str(input_dir / name1))
+            yoloimg = cv2.imread(str(input_dir / name1))
             yoloimg = cv2.resize(yoloimg, (640, 640))
-
-            result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False) 
+            result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False) 
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = np.array(result[0].masks.data.cpu())
                 #combined_mask = np.any(masks, axis=0).astype(np.uint8)
                 #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
-                image1 = cv2.resize(image1, (640, 480))
                 resized_masks1 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
                 for j in range(masks.shape[0]):
                     resized_masks1[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
                     resized_masks1[j][resized_masks1[j] == 1] = 255
-                #image1 = cv2.cvtColor(image1,cv2.COLOR_BGR2GRAY)
-            else: 
-                continue
-            
-            '''
-            background = yolo.predict(yoloimg,conf=0.2, classes=[0,1,2], verbose=False)
-            if background[0].masks is not None:
-                masks = np.array(background[0].masks.data.cpu())
-                resized_masks1 = np.any(masks, axis=0).astype(np.uint8)
-                resized_masks1 = cv2.resize(resized_masks1, (128, 128))
-                resized_masks1[resized_masks1 == 1] = 255 
-            '''
 
-            inp0 = frame2tensor(image0, device)
-            inp1 = frame2tensor(image1, device)
             timer.update('YOLO')
             # Added for YOLO END
             #Note: Utils line 428 was added to set z=0.0
@@ -368,7 +393,7 @@ if __name__ == '__main__':
                            'matches': matches, 'match_confidence': conf,
                             'indexes0':indexes0, 'indexes1':indexes1}
             np.savez(str(matches_path), **out_matches)
-
+            #'''
             # New Code: Calculate and save confusion matrix
             # True labels: whether the keypoints in image0 and corresponding match in image1 are foreground or background
             valid_matches = matches != -1  # Matches that are valid (not -1)
@@ -412,7 +437,7 @@ if __name__ == '__main__':
             # Save confusion matrices as images for each pair
             save_confusion_matrix(conf_matrix, "Confusion Matrix for Matches in Image 0",
                                 conf_output_dir / f"{stem0}_{stem1}_conf_matrix_image0.png")
-
+            #'''
         # Keep the matching keypoints.
         valid = matches > -1
         mkpts0 = kpts0[valid]
@@ -466,6 +491,27 @@ if __name__ == '__main__':
                         'num_correct': num_correct,
                         'epipolar_errors': epi_errs}
             np.savez(str(eval_path), **out_eval)
+
+            # Convert ground truth and recovered rotation/translation to transformation matrices
+            gt_pose = T_0to1
+            if ret is not None:
+                recovered_pose = np.eye(4)
+                recovered_pose[:3, :3] = R
+                recovered_pose[:2, 3] = t[:2]
+                rp += recovered_pose[:2, 3]
+                print(rp)
+            else:
+                recovered_pose = None
+
+            # Save ground truth and recovered poses to an npz file
+            output_pose_data = {
+                'ground_truth_pose': gt_pose
+            }
+            if recovered_pose is not None:
+                output_pose_data['recovered_pose'] = recovered_pose
+
+            np.savez(str(output_dir / '{}_{}_poses.npz'.format(stem0, stem1)), **output_pose_data)
+
             timer.update('eval')
 
         if do_viz:
@@ -530,7 +576,7 @@ if __name__ == '__main__':
             timer.update('viz_eval')
 
         timer.print('Finished pair {:5} of {:5}'.format(i, len(pairs)))
-
+    #'''
     # After processing all pairs, compute and save the average confusion matrix
     if num_pairs > 0:
         avg_conf_matrix = conf_matrix_sum / num_pairs
@@ -538,7 +584,7 @@ if __name__ == '__main__':
         # Save the average confusion matrices with a different colormap ('viridis')
         save_confusion_matrix(avg_conf_matrix, "Average Confusion Matrix for Matches in Image 0",
                             conf_output_dir / "average_conf_matrix_image0.png", cmap='viridis')
-
+    #'''
     if opt.eval:
         # Collate the results into a final table and print to terminal.
         pose_errors = []

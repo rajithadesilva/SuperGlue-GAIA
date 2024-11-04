@@ -8,7 +8,7 @@ months2=("march" "april" "may" "june" "september")
 
 # Descriptors
 #descriptor1="64N-192U-FN"
-descriptor2="UT-64U-192U-FN-SPBG"
+descriptor2="U-64U-196U-FN-SPBG"
 
 # Loop over each month and run the command for the first descriptor
 #for month in "${months1[@]}"
@@ -21,7 +21,7 @@ descriptor2="UT-64U-192U-FN-SPBG"
 for month in "${months2[@]}"
 do
     echo "Running match_pairs.py for month: $month with descriptor: $descriptor2"
-    ./match_pairs.py --eval --viz --month "$month" --desc "$descriptor2"
+    ./match_pairs.py --eval --viz --cache --month "$month" --desc "$descriptor2"
 done
 
 echo "All tasks completed."

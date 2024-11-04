@@ -325,7 +325,7 @@ class SuperPoint(nn.Module):
         # Compute the dense descriptors
         cDa = self.relu(self.convDa(x))
         descriptors = self.convDb(cDa)
-        descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+        #descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
         descriptors = [sample_descriptors(k[None], d[None], 8)[0]
                for k, d in zip(keypoints, descriptors)]
         
@@ -348,7 +348,9 @@ class SuperPoint(nn.Module):
                     #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
                     bottleneck_vector = (encoded.cpu().numpy())
                     semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
+                    
                 else:
+
                     semantic_descriptors.append(desc.cpu().numpy())
                     '''
                     desc = desc.to(self.device)
@@ -363,11 +365,16 @@ class SuperPoint(nn.Module):
                     bottleneck_vector = (encoded.cpu().numpy())
                     semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
                     '''
-            mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
-            descriptors = np.array(semantic_descriptors,np.float32)
-            descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).T.unsqueeze(0) #for unbranched
-            #descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for branched
-            descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+                
+        else:
+            mask_indexes = np.full((len(keypoints[0])), -1, dtype=np.int64)
+            semantic_descriptors = descriptors[0].T.cpu()
+
+        descriptors = np.array(semantic_descriptors,np.float32)
+        descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).T.unsqueeze(0) #for unbranched
+        #descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for branched
+        descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+        mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0)
 
         #Modified to fit semantics until here
         #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
