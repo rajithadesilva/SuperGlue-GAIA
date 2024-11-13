@@ -3,6 +3,23 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from pathlib import Path
 
+'''
+scale = {
+    "march": [9.21786078, 817.54724485, 1.0],
+    "april": [7.41406952, 4367.62265586, 1.0],
+    "may": [8.40812939, -186.88633132, 1.0],
+    "june": [7.92170162, 142.66150795, 1.0],
+    "september": [39.41186153, -31.20859617, 1.0]
+}
+'''
+scale = {
+    "march": [9.21786078, 1.0, 1.0],
+    "april": [7.41406952, 1.0, 1.0],
+    "may": [8.40812939, 1.0, 1.0],
+    "june": [7.92170162, 1.0, 1.0],
+    "september": [39.41186153, 1.0, 1.0]
+}
+
 # Declare descriptor and month variables
 desc = 'U-64U-196U-FN-SPBG'
 month = 'march'
@@ -67,31 +84,36 @@ def visualize_transformations():
     ax.set_box_aspect([1, 1, 1])
 
     # Set plot limits (adjust based on your data scale)
-    ax.set_xlim([-10, 50])
-    ax.set_ylim([-10, 10])
+    ax.set_xlim([-3, 3])
+    ax.set_ylim([-10, 20])
     ax.set_zlim([-10, 10])
 
-    # Initialize cumulative translation vector
+    # Initialize cumulative translation vector and rotation matrix
     cumulative_translation_gt = np.zeros(3)
+    cumulative_rotation_gt = np.eye(3)
     cumulative_translation_rec = np.zeros(3)
-
-    # Rotation correction matrix for recovered poses (90 degrees around Z axis)
-    #rotation_correction = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+    cumulative_rotation_rec = np.eye(3)
 
     # Plot ground truth frames
     for i, gt_pose in enumerate(gt_poses):
-        R_gt = gt_pose[:3, :3] #@ rotation_correction
+        R_gt = gt_pose[:3, :3]
         t_gt = gt_pose[:3, 3]
+        print(f'###################  Pair {i}')
+        cumulative_rotation_gt = cumulative_rotation_gt @ R_gt
         cumulative_translation_gt += t_gt
-        plot_3d_frame(ax, R_gt, cumulative_translation_gt, f'GT_Frame_{i}', color=['r', 'g', 'b'])
+        print(cumulative_translation_gt)
+        plot_3d_frame(ax, cumulative_rotation_gt, cumulative_translation_gt, f'GT_Frame_{i}', color=['r', 'g', 'b'])
 
     # Plot recovered frames
     for i, rec_pose in enumerate(recovered_poses):
-        R_rec = rec_pose[:3, :3] #@ rotation_correction
+        R_rec = rec_pose[:3, :3]
+        R_rec[:,2] = [0,0,1]
+        R_rec[2,:] = [0,0,1]
         t_rec = rec_pose[:3, 3]
-        #t_rec[[0, 1]] = t_rec[[1, 0]]  # Swap x and y translation components
-        cumulative_translation_rec += t_rec
-        plot_3d_frame(ax, R_rec, cumulative_translation_rec, f'Recovered_Frame_{i}', color=['c', 'm', 'y'])
+        cumulative_rotation_rec = cumulative_rotation_rec @ R_rec
+        cumulative_translation_rec += t_rec/100.0# np.divide(t_rec,scale[month])
+        #print(cumulative_translation_rec)
+        plot_3d_frame(ax, cumulative_rotation_rec, cumulative_translation_rec, f'Recovered_Frame_{i}', color=['c', 'm', 'y'])
 
     # plt.legend()
     plt.show()

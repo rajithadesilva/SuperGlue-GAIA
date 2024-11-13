@@ -51,7 +51,7 @@ import cv2
 import torch
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('TkAgg')
 
 
 class AverageTimer:
@@ -321,6 +321,77 @@ def read_image(path, device, resize, rotation, resize_float):
 
 # --- GEOMETRY ---
 
+def estimate_pose_3d(kpts0, kpts1, depth_map0, depth_map1, K0, K1, scales0, scales1, threshold=0.1):
+    # Convert kpts0 and kpts1 to 3D points using respective depth maps
+    points_3d_0 = []
+    points_3d_1 = []
+    valid_kpts1 = []
+    mask = []
+
+    for pt0, pt1 in zip(kpts0, kpts1):
+        # Get (u, v) coordinates
+        u0, v0 = int(pt0[0]*scales0[0]), int(pt0[1]*scales0[1])
+        u1, v1 = int(pt1[0]*scales1[0]), int(pt1[1]*scales1[1])
+
+        # Get depths for each point
+        z0 = depth_map0[v0, u0]
+        z1 = depth_map1[v1, u1]
+
+        # Check for valid depth values
+        if z0 > 0 and z1 > 0:
+            # Convert to 3D coordinates using the depth maps and camera intrinsics
+            x0 = (u0 - K0[0, 2]) * z0 / K0[0, 0]
+            y0 = (v0 - K0[1, 2]) * z0 / K0[1, 1]
+            points_3d_0.append([x0, y0, z0])
+
+            x1 = (u1 - K1[0, 2]) * z1 / K1[0, 0]
+            y1 = (v1 - K1[1, 2]) * z1 / K1[1, 1]
+            points_3d_1.append([x1, y1, z1])
+
+            valid_kpts1.append(pt1*scales1)
+
+            # Assume initially that all points are inliers
+            mask.append(1)
+        else:
+            # Mark as outlier if depth is missing
+            mask.append(0)
+
+    # Convert to NumPy arrays
+    points_3d_0 = np.array(points_3d_0, dtype=np.float32)
+    points_3d_1 = np.array(points_3d_1, dtype=np.float32)
+    valid_kpts1 = np.array(valid_kpts1, dtype=np.float32)
+
+    # Check for minimum number of points
+    if len(points_3d_0) < 4:
+        print("Not enough valid point correspondences to compute pose.")
+        return None
+
+    # Apply initial pose estimation using all valid points
+    _, rvec, tvec = cv2.solvePnP(points_3d_0, valid_kpts1, K1, None)
+    R, _ = cv2.Rodrigues(rvec)
+
+    # Apply rotation and translation to points_3d_0 to project it to the second frame
+    points_3d_0_transformed = (R @ points_3d_0.T).T + tvec.T
+
+    # Check distances between transformed points_3d_0 and points_3d_1
+    distances = np.linalg.norm(points_3d_0_transformed - points_3d_1, axis=1)
+
+    # Update mask based on threshold for inliers
+    mask = np.array(mask)
+    inlier_mask = distances < threshold
+    mask[mask == 1] = inlier_mask.astype(int)
+
+    # Ensure there are enough inliers
+    if len(points_3d_0) < 4:
+        print("Not enough inliers after masking to compute pose.")
+        return None
+
+    # Re-estimate pose using inliers
+    _, rvec, tvec = cv2.solvePnP(points_3d_0, valid_kpts1, K1, None)
+    R, _ = cv2.Rodrigues(rvec)
+    #visualize_3d_points(points_3d_0, points_3d_1, points_3d_0_transformed)
+    ret = (R, tvec.flatten(), mask)
+    return ret
 
 def estimate_pose(kpts0, kpts1, K0, K1, thresh, conf=0.99999):
     if len(kpts0) < 5:
@@ -425,7 +496,7 @@ def angle_error_vec(v1, v2):
 def compute_pose_error(T_0to1, R, t):
     R_gt = T_0to1[:3, :3]
     t_gt = T_0to1[:3, 3]
-    t[2] = 0.0 # Added by Rajitha, In GT z transition is forced to 0
+    #t[2] = 0.0 # Added by Rajitha, In GT z transition is forced to 0
     error_t = angle_error_vec(t, t_gt)
     error_t = np.minimum(error_t, 180 - error_t)  # ambiguity of E estimation
     error_R = angle_error_mat(R, R_gt)
@@ -449,6 +520,85 @@ def pose_auc(errors, thresholds):
 
 # --- VISUALIZATION ---
 
+def plot_pointcloud_with_rgb(image, depth_map, K):
+    """
+    Plots a 3D point cloud with RGB colors from an RGB image and depth map.
+
+    Parameters:
+    - image: RGB image as a (H, W, 3) array.
+    - depth_map: Depth map as a (H, W) array, with depth in meters.
+    - K: Camera intrinsic matrix as a (3, 3) array.
+    """
+    # Prepare lists for storing point cloud data
+    points_3d = []
+    colors = []
+    
+    # Get image dimensions
+    h, w = depth_map.shape
+    
+    # Intrinsic parameters
+    fx, fy = K[0, 0], K[1, 1]  # focal lengths
+    cx, cy = K[0, 2], K[1, 2]  # principal point
+
+    # Convert each pixel to a 3D point with RGB
+    for v in range(h):
+        for u in range(w):
+            z = depth_map[v, u]  # Depth value at pixel (u, v)
+            
+            if z > 0:  # Only consider points with valid depth
+                # Calculate 3D coordinates
+                x = (u - cx) * z / fx
+                y = (v - cy) * z / fy
+
+                points_3d.append([x, y, z])
+                colors.append(image[v, u] / 255.0)  # Normalize RGB values to [0, 1]
+
+    # Convert to numpy arrays
+    points_3d = np.array(points_3d)
+    colors = np.array(colors)
+    
+    # Plot the 3D point cloud
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c=colors, marker='o', s=1)
+    
+    # Labeling and viewing settings
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    plt.title("3D Point Cloud with RGB Colors")
+    plt.show()
+
+def visualize_3d_points(points_3d_0, points_3d_1=None, points_3d_0_transformed=None, mask=None):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plot the initial set of points
+    ax.scatter(points_3d_0[:, 0], points_3d_0[:, 1], points_3d_0[:, 2], c='b', marker='o', label='Points 3D 0')
+    
+    # Plot the second set of points
+    if points_3d_1 is not None:
+        ax.scatter(points_3d_1[:, 0], points_3d_1[:, 1], points_3d_1[:, 2], c='r', marker='^', label='Points 3D 1')
+    
+    # Plot the transformed points if provided
+    if points_3d_0_transformed is not None:
+        ax.scatter(points_3d_0_transformed[:, 0], points_3d_0_transformed[:, 1], points_3d_0_transformed[:, 2], 
+                   c='g', marker='x', label='Transformed Points 3D 0')
+    
+    # Optional: Highlight inliers
+    if mask is not None:
+        inliers_0 = points_3d_0[mask == 1]
+        inliers_1 = points_3d_1[mask == 1]
+        ax.scatter(inliers_0[:, 0], inliers_0[:, 1], inliers_0[:, 2], c='cyan', marker='o', s=50, label='Inliers 3D 0')
+        ax.scatter(inliers_1[:, 0], inliers_1[:, 1], inliers_1[:, 2], c='magenta', marker='^', s=50, label='Inliers 3D 1')
+
+    # Labeling and viewing settings
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.legend()
+    plt.title("3D Point Visualization")
+    plt.show()
 
 def plot_image_pair_horizontal(imgs, dpi=100, size=6, pad=.5):
     n = len(imgs)

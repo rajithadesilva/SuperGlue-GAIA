@@ -58,10 +58,10 @@ from sklearn.metrics import confusion_matrix
 
 from models.matching import Matching
 from models.utils import (compute_pose_error, compute_epipolar_error,
-                          estimate_pose, make_matching_plot,
+                          estimate_pose, estimate_pose_3d, make_matching_plot,
                           error_colormap, AverageTimer, pose_auc, read_rgb_image, read_image,
                           rotate_intrinsics, rotate_pose_inplane,
-                          scale_intrinsics, frame2tensor)
+                          scale_intrinsics, frame2tensor,plot_pointcloud_with_rgb)
 
 torch.set_grad_enabled(False)
 
@@ -229,7 +229,7 @@ if __name__ == '__main__':
 
     conf_matrix_sum = None
     num_pairs = 0
-    rp = [0.0, 0.0]
+    rp = [0.0, 0.0, 0.0]
     for i, pair in enumerate(pairs):
         name0, name1 = pair[:2]
         stem0, stem1 = Path(name0).stem, Path(name1).stem
@@ -447,13 +447,13 @@ if __name__ == '__main__':
         if do_eval:
             # Estimate the pose and compute the pose error.
             assert len(pair) == 38, 'Pair does not have ground truth info'
-            K0 = np.array(pair[4:13]).astype(float).reshape(3, 3)
-            K1 = np.array(pair[13:22]).astype(float).reshape(3, 3)
+            K0_original = np.array(pair[4:13]).astype(float).reshape(3, 3)
+            K1_original = np.array(pair[13:22]).astype(float).reshape(3, 3)
             T_0to1 = np.array(pair[22:]).astype(float).reshape(4, 4)
 
             # Scale the intrinsics to resized image.
-            K0 = scale_intrinsics(K0, scales0)
-            K1 = scale_intrinsics(K1, scales1)
+            K0 = scale_intrinsics(K0_original, scales0)
+            K1 = scale_intrinsics(K1_original, scales1)
 
             # Update the intrinsics + extrinsics if EXIF rotation was found.
             if rot0 != 0 or rot1 != 0:
@@ -476,11 +476,20 @@ if __name__ == '__main__':
             matching_score = num_correct / len(kpts0) if len(kpts0) > 0 else 0
 
             thresh = 1.  # In pixels relative to resized image size.
+
+            # Get depth based pose estimation
+            #depth0 = cv2.imread(str(input_dir / "depth" / name0.replace("color", "depth")),cv2.IMREAD_GRAYSCALE)
+            #depth1 = cv2.imread(str(input_dir / "depth" / name1.replace("color", "depth")),cv2.IMREAD_GRAYSCALE)
+            #ret = estimate_pose_3d(mkpts0, mkpts1, depth0, depth1, K0_original, K1_original, scales0, scales1)
+            #plot_pointcloud_with_rgb(image0,depth0,K0)
+            
             ret = estimate_pose(mkpts0, mkpts1, K0, K1, thresh)
             if ret is None:
                 err_t, err_R = np.inf, np.inf
             else:
                 R, t, inliers = ret
+                rp += (t/100.0)
+                print(rp)
                 err_t, err_R = compute_pose_error(T_0to1, R, t)
 
             # Write the evaluation results to disk.
@@ -497,9 +506,10 @@ if __name__ == '__main__':
             if ret is not None:
                 recovered_pose = np.eye(4)
                 recovered_pose[:3, :3] = R
-                recovered_pose[:2, 3] = t[:2]
-                rp += recovered_pose[:2, 3]
-                print(rp)
+                recovered_pose[0, 3] = -t[2] # X_rec
+                recovered_pose[1, 3] = -t[0] # Y_rec=0.0
+                recovered_pose[2, 3] = 0.0 # Z_rec
+                rp += recovered_pose[:3, 3]
             else:
                 recovered_pose = None
 
