@@ -92,7 +92,7 @@ if __name__ == '__main__':
         '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
-        '--max_keypoints', type=int, default=-1,
+        '--max_keypoints', type=int, default=100,
         help='Maximum number of keypoints detected by Superpoint'
              ' (\'-1\' keeps all keypoints)')
     parser.add_argument(
@@ -157,6 +157,10 @@ if __name__ == '__main__':
     vs = VideoStreamer(opt.input, opt.resize, opt.skip,
                        opt.image_glob, opt.max_length)
     frame, ret = vs.next_frame()
+
+    frame = cv2.imread("assets/long/march/rgb/march_color_image_0.png")
+    frame = cv2.resize(frame,(640,480),cv2.INTER_AREA)
+
     rgb0 = frame
     assert ret, 'Error when reading the first frame (try different --input?)'
 
@@ -170,7 +174,7 @@ if __name__ == '__main__':
         sem_background = cv2.resize(sem_background, (128, 128))
         sem_background[sem_background == 1] = 255 
     '''
-    result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False)
+    result = yolo.predict(yoloimg,conf=0.2, classes=[0, 4], verbose=False)
     if result[0].masks is not None:
         masks = np.array(result[0].masks.data.cpu())
         combined_mask0 = np.any(masks, axis=0).astype(np.uint8)
@@ -183,7 +187,8 @@ if __name__ == '__main__':
         frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 
     #semantic_encoder = Semantic_DescEncoder()
-    frame_tensor = frame2tensor(frame, device)
+    frame_tensor = frame2tensor(cv2.cvtColor(rgb0,cv2.COLOR_RGB2GRAY), device)
+
     last_data = matching.superpoint({'image': frame_tensor}, resized_masks0)
     #last_data = semantic_encoder.encode(frame_tensor,sem_background)
     last_data = {k+'0': last_data[k] for k in keys}
@@ -223,6 +228,7 @@ if __name__ == '__main__':
             break
         timer.update('data')
         stem0, stem1 = last_image_id, vs.i - 1
+        eval_path = Path(opt.output_dir) / '{}_{}_evaluation.npz'.format(stem0, stem1)
         
         yoloimg = frame #cv2.cvtColor(frame,cv2.COLOR_GRAY2RGB)
         yoloimg = cv2.resize(yoloimg, (640, 640))
@@ -235,7 +241,7 @@ if __name__ == '__main__':
             sem_background = cv2.resize(sem_background, (128, 128))
             sem_background[sem_background == 1] = 255
         '''
-        result = yolo.predict(yoloimg,conf=0.2, classes=[4], verbose=False)
+        result = yolo.predict(yoloimg,conf=0.2, classes=[0, 4], verbose=False)
         if result[0].masks is not None:
             masks = np.array(result[0].masks.data.cpu())
             combined_mask1 = np.any(masks, axis=0).astype(np.uint8)
@@ -250,11 +256,9 @@ if __name__ == '__main__':
         else: 
             continue
 
-        frame_tensor = frame2tensor(frame, device)
+        frame_tensor = frame2tensor(cv2.cvtColor(rgb1,cv2.COLOR_RGB2GRAY), device)
 
         pred = matching({**last_data, 'image1': frame_tensor},resized_masks0,resized_masks1)
-        #kpts0 = last_data['keypoints0'].cpu().numpy() # for semenc
-        #kpts1 = pred['keypoints1'].cpu().numpy() # for semenc
         kpts0 = last_data['keypoints0'][0].cpu().numpy()
         kpts1 = pred['keypoints1'][0].cpu().numpy()
         matches = pred['matches0'][0].cpu().numpy()
@@ -290,6 +294,15 @@ if __name__ == '__main__':
         out = make_matching_plot_fast_rgb(
             rgb0, rgb1, combined_mask0, combined_mask1, kpts0, kpts1, mkpts0, mkpts1, color, text,
             path=None, show_keypoints=opt.show_keypoints, small_text=small_text)
+        
+        # Write the evaluation results to disk.
+        out_eval = {'kpts0': kpts0,
+                    'kpts1': kpts1,
+                    'mkpts0': mkpts0,
+                    'mkpts1': mkpts1,
+                    'matches': matches,
+                    'confidence': confidence}
+        np.savez(str(eval_path), **out_eval)
 
         if not opt.no_display:
             cv2.imshow('SuperGlue matches', out)
@@ -321,12 +334,14 @@ if __name__ == '__main__':
                 opt.show_keypoints = not opt.show_keypoints
 
         # Update last_data and last_frame for the next iteration
+        """
         last_data = {k+'0': pred[k+'1'] for k in keys}
         last_data['image0'] = frame_tensor
         last_frame = frame
         last_image_id = (vs.i - 1)
         rgb0 = rgb1
         combined_mask0 = combined_mask1
+        """
 
         timer.update('viz')
         timer.print()

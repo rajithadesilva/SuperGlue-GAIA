@@ -20,6 +20,8 @@ scale = {
     "september": [39.41186153, 1.0, 1.0]
 }
 
+
+rot = [[0,0,1],[-1,0,0],[0,-1,0]]
 # Declare descriptor and month variables
 desc = 'U-64U-196U-FN-SPBG'
 month = 'march'
@@ -84,34 +86,39 @@ def visualize_transformations():
     ax.set_box_aspect([1, 1, 1])
 
     # Set plot limits (adjust based on your data scale)
-    ax.set_xlim([-3, 3])
+    #ax.set_xlim([-3, 3])
     ax.set_ylim([-10, 20])
     ax.set_zlim([-10, 10])
 
     # Initialize cumulative translation vector and rotation matrix
     cumulative_translation_gt = np.zeros(3)
     cumulative_rotation_gt = np.eye(3)
-    cumulative_translation_rec = np.zeros(3)
-    cumulative_rotation_rec = np.eye(3)
+    #cumulative_translation_rec = np.zeros(3)
+    #cumulative_rotation_rec = np.eye(3)
 
     # Plot ground truth frames
     for i, gt_pose in enumerate(gt_poses):
         R_gt = gt_pose[:3, :3]
         t_gt = gt_pose[:3, 3]
+        if i == 0:
+            cumulative_translation_rec = gt_pose[:3, 3]
+            cumulative_rotation_rec = gt_pose[:3, :3]
         print(f'###################  Pair {i}')
         cumulative_rotation_gt = cumulative_rotation_gt @ R_gt
         cumulative_translation_gt += t_gt
-        print(cumulative_translation_gt)
+        #print(cumulative_translation_gt)
         plot_3d_frame(ax, cumulative_rotation_gt, cumulative_translation_gt, f'GT_Frame_{i}', color=['r', 'g', 'b'])
 
     # Plot recovered frames
     for i, rec_pose in enumerate(recovered_poses):
         R_rec = rec_pose[:3, :3]
-        R_rec[:,2] = [0,0,1]
-        R_rec[2,:] = [0,0,1]
         t_rec = rec_pose[:3, 3]
+        t_rec[0] = -rec_pose[2, 3]
+        t_rec[1] = rec_pose[1, 3]
+        t_rec[2] = 0.0
+
         cumulative_rotation_rec = cumulative_rotation_rec @ R_rec
-        cumulative_translation_rec += t_rec/100.0# np.divide(t_rec,scale[month])
+        cumulative_translation_rec += np.divide(t_rec,scale[month])
         #print(cumulative_translation_rec)
         plot_3d_frame(ax, cumulative_rotation_rec, cumulative_translation_rec, f'Recovered_Frame_{i}', color=['c', 'm', 'y'])
 

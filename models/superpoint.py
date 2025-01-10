@@ -45,7 +45,7 @@ import torch
 from torch import nn
 import numpy as np
 
-ENCDIM = 64
+ENCDIM = 256
 
 def simple_nms(scores, nms_radius: int):
     """ Fast Non-maximum suppression to remove nearby points """
@@ -252,7 +252,7 @@ class SuperPoint(nn.Module):
         print('Loaded SuperPoint model')
         #'''
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
+        '''
         self.LinearAutoencoder = LinearAutoencoder()
         self.LinearAutoencoder.load_state_dict(torch.load(f'./models/weights/{ENCDIM}_superpoint_encoder.pth'))
         self.LinearAutoencoder.to(self.device)
@@ -268,7 +268,7 @@ class SuperPoint(nn.Module):
         self.LinearEncoder.to(self.device)
 
         print('Loaded SuperPoint Linear Autoencoder model')
-        
+        '''
         self.encdec = EncoderDecoder()
         self.encdec.load_state_dict(torch.load(f'./models/weights/{ENCDIM}_BN.pth'))
         self.encdec.to(self.device)
@@ -325,10 +325,9 @@ class SuperPoint(nn.Module):
         # Compute the dense descriptors
         cDa = self.relu(self.convDa(x))
         descriptors = self.convDb(cDa)
-        #descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
+        descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
         descriptors = [sample_descriptors(k[None], d[None], 8)[0]
                for k, d in zip(keypoints, descriptors)]
-        
         
         #Modified to fit semantics from here
         if masks is not None:
@@ -336,21 +335,30 @@ class SuperPoint(nn.Module):
            
             semantic_descriptors = []
             for idx, desc in enumerate(descriptors[0].T):
+                #'''
                 if mask_indexes[idx]>= 0:
-                    desc = desc.to(self.device)
-                    reduced_desc = self.LinearEncoder(desc)
-                    #reduced_desc = torch.nn.functional.normalize(reduced_desc, p=2, dim=0)
-                    reduced_desc = reduced_desc.cpu().numpy()
+                    #desc = desc.to(self.device)
+                    #reduced_desc = self.LinearEncoder(desc)
+                    ##reduced_desc = torch.nn.functional.normalize(reduced_desc, p=2, dim=0)
+                    #reduced_desc = reduced_desc.cpu().numpy()
 
                     sem_background = masks[mask_indexes[idx]]
                     sem_background = torch.tensor(sem_background, dtype=torch.float32).to(self.device)
-                    encoded = self.semenc(sem_background.unsqueeze(0).unsqueeze(0))
+                    sem_background = torch.nn.functional.interpolate(
+                                        sem_background.unsqueeze(0).unsqueeze(0),
+                                        size=(128, 128),  # Adjust to expected input size
+                                        mode='bilinear',
+                                        align_corners=False
+                                    )
+                    encoded = self.semenc(sem_background)
                     #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
                     bottleneck_vector = (encoded.cpu().numpy())
-                    semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
+                    #semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
+                    semantic_descriptors.append(desc.cpu().numpy()+bottleneck_vector[0])
+                    
                     
                 else:
-
+                #'''
                     semantic_descriptors.append(desc.cpu().numpy())
                     '''
                     desc = desc.to(self.device)
@@ -360,7 +368,13 @@ class SuperPoint(nn.Module):
 
                     sem_background = np.any(masks, axis=0).astype(np.uint8)
                     sem_background = torch.tensor(sem_background, dtype=torch.float32).to(self.device)
-                    encoded = self.semenc(sem_background.unsqueeze(0).unsqueeze(0))
+                    sem_background = torch.nn.functional.interpolate(
+                                        sem_background.unsqueeze(0).unsqueeze(0),
+                                        size=(128, 128),  # Adjust to expected input size
+                                        mode='bilinear',
+                                        align_corners=False
+                                    )
+                    encoded = self.semenc(sem_background)
                     #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
                     bottleneck_vector = (encoded.cpu().numpy())
                     semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
@@ -369,7 +383,7 @@ class SuperPoint(nn.Module):
         else:
             mask_indexes = np.full((len(keypoints[0])), -1, dtype=np.int64)
             semantic_descriptors = descriptors[0].T.cpu()
-
+        
         descriptors = np.array(semantic_descriptors,np.float32)
         descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).T.unsqueeze(0) #for unbranched
         #descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for branched

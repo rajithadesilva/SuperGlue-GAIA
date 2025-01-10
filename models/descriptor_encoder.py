@@ -30,7 +30,7 @@ class DescriptorFeatureExtractor(nn.Module):
         else:
             raise ValueError("Invalid keypoint type. Choose from ['sift', 'orb']")
 
-        self.mlp = MLP([input_dim, 1024, 512, 256, 128]) #MLP([input_dim, 64, 128, 256, 512, 256, 128])
+        self.mlp = MLP([input_dim, 1024, 512, 256]) #MLP([input_dim, 64, 128, 256, 512, 256, 128])
 
     def forward(self, x):
         if x.dim() == 2:
@@ -108,7 +108,7 @@ class Semantic_DescEncoder():
         self.semenc.encoder.load_state_dict(self.encdec.encoder.state_dict())
 
         self.desenc = DescriptorFeatureExtractor()
-        self.desenc.load_state_dict(torch.load('./models/weights/orb_feature_extractor4.pth'))
+        self.desenc.load_state_dict(torch.load('./models/weights/orb_feature_extractor6.pth')) #See colab for ext. ID
         self.desenc.to(self.device)
 
         self.yolo = YOLO("./models/weights/yolo.pt")

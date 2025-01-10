@@ -51,6 +51,8 @@ import cv2
 import torch
 import matplotlib.pyplot as plt
 import matplotlib
+from sklearn.metrics import confusion_matrix
+import re
 matplotlib.use('TkAgg')
 
 
@@ -134,7 +136,11 @@ class VideoStreamer:
             for j in range(1, len(image_glob)):
                 image_path = list(Path(basedir).glob(image_glob[j]))
                 self.listing = self.listing + image_path
-            self.listing.sort()
+            # Custom sort key to handle natural ordering
+            def natural_key(path):
+                parts = re.split(r'(\d+)', str(path))  # Split into text and number
+                return [int(part) if part.isdigit() else part for part in parts]
+            self.listing.sort(key=natural_key)
             self.listing = self.listing[::self.skip]
             self.max_length = np.min([self.max_length, len(self.listing)])
             if self.max_length == 0:
@@ -294,7 +300,7 @@ def read_rgb_image(path, device, resize, rotation, resize_float):
         if rotation % 2:
             scales = scales[::-1]
     
-    inp = None# frame2tensor(image, device)
+    inp = frame2tensor(image, device)
     return image, inp, scales
 
 def read_image(path, device, resize, rotation, resize_float):
@@ -320,6 +326,367 @@ def read_image(path, device, resize, rotation, resize_float):
 
 
 # --- GEOMETRY ---
+
+def project_images(input_images, rotation_matrices, translation_vectors, camera_matrix, expected_images=None, viz=False):
+    """
+    Projects a set of input binarized grayscale images based on given rotation, translation matrices, and camera intrinsic matrix.
+    For each input image, computes IoU with a stack of expected images and visualizes the one with the best IoU.
+    If the best IoU is below the threshold (0.1), returns -1 as the best index.
+    When a match is found, the matched expected image is removed from the expected_images internally.
+
+    Args:
+        input_images (np.ndarray): A stack of input binarized grayscale images as a 3D NumPy array of shape (M, H, W).
+                                   Each image should have values 0 or 255.
+        rotation_matrices (np.ndarray): Either a single 3x3 rotation matrix or a stack of rotation matrices of shape (M, 3, 3).
+        translation_vectors (np.ndarray): Either a single 3x1 translation vector or a stack of translation vectors of shape (M, 3, 1).
+        camera_matrix (np.ndarray): A 3x3 intrinsic camera matrix.
+        expected_images (np.ndarray, optional): A stack of expected binarized grayscale images to compare with the projected images.
+                                                Should be a 3D NumPy array of shape (N, H, W), where N is the number of images.
+        viz (bool): If True, visualize the original, projected, and best matching expected image with IoU overlay.
+
+    Returns:
+        list: A list of projected binarized grayscale images.
+        list: A list of best IoU values for each input image.
+        list: A list of indexes of the expected images with the best IoU (or -1 if below threshold).
+    """
+    if input_images is None:
+        print("Warning: input_images is None, skipping processing.")
+        return [], [], []  # Or some other default value indicating no operation was performed
+    
+    # IoU threshold
+    IOU_THRESHOLD = 0.1
+
+    # Ensure the input_images is a 3D array
+    if len(input_images.shape) != 3:
+        raise ValueError("Input images must be a stack of images with shape (M, H, W).")
+
+    num_inputs = input_images.shape[0]
+    height, width = input_images.shape[1], input_images.shape[2]
+
+    # Handle single rotation matrix and translation vector
+    if rotation_matrices.shape == (3, 3):
+        # Replicate the rotation matrix for all input images
+        rotation_matrices = np.tile(rotation_matrices, (num_inputs, 1, 1))
+    elif rotation_matrices.shape != (num_inputs, 3, 3):
+        raise ValueError(f"Rotation matrices must have shape ({num_inputs}, 3, 3) or (3, 3).")
+
+    if translation_vectors.shape in [(3,), (3, 1)]:
+        translation_vectors = translation_vectors.reshape(1, 3, 1)
+        # Replicate the translation vector for all input images
+        translation_vectors = np.tile(translation_vectors, (num_inputs, 1, 1))
+    elif translation_vectors.shape != (num_inputs, 3, 1):
+        raise ValueError(f"Translation vectors must have shape ({num_inputs}, 3, 1) or (3, 1).")
+
+    # Initialize lists to store results
+    projected_images = []
+    best_ious = []
+    best_indexes = []
+
+    # Keep track of the original indices of expected images
+    if expected_images is not None:
+        expected_indices = list(range(expected_images.shape[0]))
+        # Convert expected_images to a list for internal management
+        expected_images_list = [expected_images[i] for i in range(expected_images.shape[0])]
+    else:
+        expected_indices = []
+        expected_images_list = []
+
+    for i in range(num_inputs):
+        input_image = input_images[i]
+        rotation_matrix = rotation_matrices[i]
+        translation_vector = translation_vectors[i]
+
+        # Ensure the image is grayscale and binarized
+        if len(input_image.shape) != 2:
+            raise ValueError(f"Input image at index {i} must be a grayscale image.")
+
+        unique_vals = np.unique(input_image)
+        if not (np.array_equal(unique_vals, [0]) or np.array_equal(unique_vals, [255]) or np.array_equal(unique_vals, [0, 255])):
+            raise ValueError(f"Input image at index {i} must be binarized with values 0 and 255.")
+
+        # Generate a grid of (x, y, 1) homogeneous coordinates
+        y_coords, x_coords = np.indices((height, width))
+        ones = np.ones_like(x_coords)
+        homogeneous_coords = np.stack((x_coords, y_coords, ones), axis=-1).reshape(-1, 3).T  # shape: (3, N)
+
+        # Convert pixel coordinates to normalized camera coordinates
+        inv_K = np.linalg.inv(camera_matrix)
+        normalized_coords = inv_K @ homogeneous_coords  # shape: (3, N)
+
+        # Assume the plane is at Z = 0
+        R_2x2 = rotation_matrix[:2, :2]
+        # Ensure t_2x1 has shape (2, 1)
+        t_2x1 = translation_vector[:2].reshape(2, 1)
+
+        # Perform the coordinate transformation
+        transformed_coords = R_2x2 @ normalized_coords[:2, :] + t_2x1
+
+        # Project back to pixel coordinates
+        projected_coords = camera_matrix[:2, :2] @ transformed_coords + camera_matrix[:2, 2:3]
+
+        # Reshape to image shape
+        map_x = projected_coords[0, :].reshape(height, width).astype(np.float32)
+        map_y = projected_coords[1, :].reshape(height, width).astype(np.float32)
+
+        # Remap the image
+        projected_image = cv2.remap(input_image, map_x, map_y, interpolation=cv2.INTER_NEAREST,
+                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        projected_images.append(projected_image)
+
+        best_iou = 0
+        best_index = -1
+        best_expected_image = None
+
+        if expected_images_list:
+            num_expected = len(expected_images_list)
+
+            # Ensure all expected images have the correct size
+            for idx in range(num_expected):
+                exp_img = expected_images_list[idx]
+                if exp_img.shape != (height, width):
+                    raise ValueError(f"Expected image at index {expected_indices[idx]} must have the same size as the input image.")
+
+                # Validate that exp_img is binarized
+                unique_vals = np.unique(exp_img)
+                if not (np.array_equal(unique_vals, [0]) or np.array_equal(unique_vals, [255]) or np.array_equal(unique_vals, [0, 255])):
+                    raise ValueError(f"Expected image at index {expected_indices[idx]} must be binarized with values 0 and 255.")
+
+                # Compute Intersection and Union
+                intersection = cv2.bitwise_and(projected_image, exp_img)
+                union = cv2.bitwise_or(projected_image, exp_img)
+
+                # Calculate IoU
+                intersection_count = np.count_nonzero(intersection)
+                union_count = np.count_nonzero(union)
+
+                # Handle the case where both masks are empty (union_count == 0)
+                if union_count == 0:
+                    if np.count_nonzero(projected_image) == 0 and np.count_nonzero(exp_img) == 0:
+                        iou = 1.0  # Both masks are empty; define IoU as 1
+                    else:
+                        iou = 0.0  # One mask is empty; define IoU as 0
+                else:
+                    iou = intersection_count / union_count
+
+                # Update best IoU and expected image
+                if iou > best_iou:
+                    best_iou = iou
+                    best_index = idx  # Index within expected_images_list
+                    best_expected_image = exp_img
+
+            # Apply IoU threshold
+            if best_iou < IOU_THRESHOLD:
+                best_index = -1  # No expected image meets the threshold
+                best_expected_image = None  # No visualization for below-threshold match
+            else:
+                # Remove the matched expected image and its index
+                matched_expected_index = expected_indices.pop(best_index)
+                expected_images_list.pop(best_index)
+                best_index = matched_expected_index  # Use the original index
+        else:
+            best_index = -1
+            best_iou = 0
+            best_expected_image = None
+
+        best_ious.append(best_iou)
+        best_indexes.append(best_index)
+
+        if viz:
+            if best_expected_image is not None:
+                # Visualization code for matched image
+                overlay = np.zeros((height, width, 3), dtype=np.uint8)
+
+                # Assign colors: projected_image in red, best_expected_image in green, intersection in yellow
+                overlay[(projected_image == 255) & (best_expected_image == 0)] = [0, 0, 255]        # Red
+                overlay[(projected_image == 0) & (best_expected_image == 255)] = [0, 255, 0]        # Green
+                overlay[(projected_image == 255) & (best_expected_image == 255)] = [0, 255, 255]    # Yellow
+
+                # Add IoU text to the overlay image
+                cv2.putText(overlay, f'Best IoU: {best_iou:.2f}', (10, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(overlay, f'Best Index: {best_index}', (10, 110), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                # Convert images to color for visualization
+                input_color = cv2.cvtColor(input_image, cv2.COLOR_GRAY2BGR)
+                expected_color = cv2.cvtColor(best_expected_image, cv2.COLOR_GRAY2BGR)
+                projected_color = cv2.cvtColor(projected_image, cv2.COLOR_GRAY2BGR)
+
+                # Add labels to each image
+                cv2.putText(input_color, 'Input Image', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                cv2.putText(expected_color, 'Expected Image', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                cv2.putText(projected_color, 'Projected Image', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                cv2.putText(overlay, 'Overlay', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                # Stack images side by side for visualization
+                top_row = np.hstack((input_color, expected_color))
+                bottom_row = np.hstack((projected_color, overlay))
+                combined_image = np.vstack((top_row, bottom_row))
+
+                # Resize combined image if it's too large
+                screen_res = 1280, 720
+                scale_width = screen_res[0] / combined_image.shape[1]
+                scale_height = screen_res[1] / combined_image.shape[0]
+                scale = min(scale_width, scale_height, 1)
+                window_width = int(combined_image.shape[1] * scale)
+                window_height = int(combined_image.shape[0] * scale)
+                combined_image_resized = cv2.resize(combined_image, (window_width, window_height))
+
+                cv2.imshow(f"Visualization for Input Image {i}", combined_image_resized)
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
+            else:
+                # Visualization code when no match is found
+                input_color = cv2.cvtColor(input_image, cv2.COLOR_GRAY2BGR)
+                projected_color = cv2.cvtColor(projected_image, cv2.COLOR_GRAY2BGR)
+
+                # Add labels to each image
+                cv2.putText(input_color, 'Input Image', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                cv2.putText(projected_color, 'Projected Image', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                # Create a blank expected image and overlay for visualization
+                expected_color = np.zeros_like(input_color)
+                overlay = np.zeros_like(input_color)
+
+                # Add labels
+                cv2.putText(expected_color, 'No Match', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (0, 0, 255), 2, cv2.LINE_AA)
+
+                cv2.putText(overlay, 'No Overlay', (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (0, 0, 255), 2, cv2.LINE_AA)
+
+                # Stack images side by side for visualization
+                top_row = np.hstack((input_color, expected_color))
+                bottom_row = np.hstack((projected_color, overlay))
+                combined_image = np.vstack((top_row, bottom_row))
+
+                # Resize combined image if it's too large
+                screen_res = 1280, 720
+                scale_width = screen_res[0] / combined_image.shape[1]
+                scale_height = screen_res[1] / combined_image.shape[0]
+                scale = min(scale_width, scale_height, 1)
+                window_width = int(combined_image.shape[1] * scale)
+                window_height = int(combined_image.shape[0] * scale)
+                combined_image_resized = cv2.resize(combined_image, (window_width, window_height))
+
+                cv2.imshow(f"Visualization for Input Image {i}", combined_image_resized)
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
+
+    return projected_images, best_ious, best_indexes
+
+def estimate_scale(keypoints0, keypoints1, depths0, depths1, scales0, scales1, K0, K1, R, t, S=None):
+    """
+    Estimate the scale factor for the translation vector using depth maps.
+
+    Parameters:
+    - keypoints0: Nx2 array of keypoints in image 0 (resized pixel coordinates).
+    - keypoints1: Nx2 array of keypoints in image 1 (resized pixel coordinates).
+    - depths0: 2D numpy array of depth values for image 0 (original resolution).
+    - depths1: 2D numpy array of depth values for image 1 (original resolution).
+    - scales0: Tuple or list of scaling factors (scale_x0, scale_y0) for image 0.
+    - scales1: Tuple or list of scaling factors (scale_x1, scale_y1) for image 1.
+    - K0: Camera intrinsic matrix for image 0 (3x3 numpy array).
+    - K1: Camera intrinsic matrix for image 1 (3x3 numpy array).
+    - R: Estimated rotation matrix from pose estimation (3x3 numpy array).
+    - t: Estimated translation vector from pose estimation (3-element numpy array).
+
+    Returns:
+    - s: Estimated scale factor (float).
+    - t_scaled: Scaled translation vector (3-element numpy array).
+    """
+
+    # Ensure inputs are numpy arrays
+    keypoints0 = np.asarray(keypoints0)
+    keypoints1 = np.asarray(keypoints1)
+    depths0 = np.asarray(depths0)
+    depths1 = np.asarray(depths1)
+    scales0 = np.asarray(scales0)
+    scales1 = np.asarray(scales1)
+    t = np.asarray(t).flatten()  # Ensure t is a 1D array of shape (3,)
+
+    # Invert the intrinsic matrices
+    K0_inv = np.linalg.inv(K0)
+    K1_inv = np.linalg.inv(K1)
+
+    numerator = 0.0
+    denominator = 0.0
+    valid_points = 0  # Count of valid points used in estimation
+    N = keypoints0.shape[0]
+
+    for i in range(N):
+        # Keypoints in resized coordinate frame
+        u0_resized, v0_resized = keypoints0[i]
+        u1_resized, v1_resized = keypoints1[i]
+
+        # Map keypoints to original image coordinate frame
+        u0_orig = int(u0_resized * scales0[0])
+        v0_orig = int(v0_resized * scales0[1])
+        u1_orig = int(u1_resized * scales1[0])
+        v1_orig = int(v1_resized * scales1[1])
+
+        # Ensure pixel indices are within the image bounds
+        h0, w0 = depths0.shape
+        h1, w1 = depths1.shape
+        if not (0 <= u0_orig < w0 and 0 <= v0_orig < h0 and
+                0 <= u1_orig < w1 and 0 <= v1_orig < h1):
+            continue  # Skip if the keypoint is outside the image bounds
+
+        # Get depth values from the depth maps at the original resolution
+        z0 = depths0[v0_orig, u0_orig]
+        z1 = depths1[v1_orig, u1_orig]
+
+        # Skip if depth values are invalid (e.g., zero or NaN)
+        if z0 <= 0 or np.isnan(z0) or z1 <= 0 or np.isnan(z1):
+            continue
+
+        # Construct scaled homogeneous coordinates
+        point0_h_scaled = np.array([u0_orig, v0_orig, 1.0])
+        point1_h_scaled = np.array([u1_orig, v1_orig, 1.0])
+
+        # Reconstruct 3D points in camera coordinate system
+        X0 = K0_inv @ point0_h_scaled * z0
+        X1 = K1_inv @ point1_h_scaled * z1
+
+        # Transform X1 to the coordinate system of the first camera
+        X1_transformed = R @ X1
+
+        # Compute the difference vector
+        delta_X = (X0 - X1_transformed)
+
+        # Accumulate numerator and denominator for scale estimation
+        numerator += np.dot(t, delta_X)
+        denominator += np.dot(t, t)
+
+        valid_points += 1
+
+    # Check if denominator is zero to avoid division by zero
+    if denominator == 0 or valid_points == 0:
+        return None, None
+        #raise ValueError("No valid points found; cannot compute scale factor.")
+
+    # Compute the scale factor s
+    s = numerator / denominator  # Result is a scalar
+    if S:
+        s = S
+
+    # Compute the scaled translation vector
+    t_scaled = (s) * t  # t_scaled is now a 1D array of shape (3,)
+    #t_scaled = np.array([[0,0,1],[-1,0,0],[0,0,0]]) @ t_scaled 
+    #print(np.linalg.norm(t))
+    #print(np.linalg.norm(t_scaled))
+
+    return s, t_scaled
 
 def estimate_pose_3d(kpts0, kpts1, depth_map0, depth_map1, K0, K1, scales0, scales1, threshold=0.1):
     # Convert kpts0 and kpts1 to 3D points using respective depth maps
@@ -520,6 +887,41 @@ def pose_auc(errors, thresholds):
 
 # --- VISUALIZATION ---
 
+def plot_3d_vectors(t1, t2):
+    """
+    Plots two 3D vectors as arrows starting from the origin.
+    
+    Parameters:
+    t1, t2: Lists or arrays with 3 elements each representing the vectors in 3D space.
+    """
+    # Create a 3D plot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Define origin
+    origin = [0, 0, 0]
+    
+    # Plot vector t1
+    ax.quiver(*origin, t1[0], t1[1], t1[2], color='blue', label='t1', linewidth=2, arrow_length_ratio=0.1)
+    
+    # Plot vector t2
+    ax.quiver(*origin, t2[0], t2[1], t2[2], color='red', label='t2', linewidth=2, arrow_length_ratio=0.1)
+    
+    # Set plot limits for better visualization
+    max_range = max(np.linalg.norm(t1), np.linalg.norm(t2))
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-max_range, max_range])
+    
+    # Set labels and legend
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.legend()
+    
+    # Show the plot
+    plt.show()
+
 def plot_pointcloud_with_rgb(image, depth_map, K):
     """
     Plots a 3D point cloud with RGB colors from an RGB image and depth map.
@@ -630,7 +1032,6 @@ def plot_keypoints(kpts0, kpts1, color='w', ps=2):
     ax = plt.gcf().axes
     ax[0].scatter(kpts0[:, 0], kpts0[:, 1], c=color, s=ps)
     ax[1].scatter(kpts1[:, 0], kpts1[:, 1], c=color, s=ps)
-
 
 def plot_matches(kpts0, kpts1, color, lw=1.5, ps=4):
     fig = plt.gcf()
@@ -769,7 +1170,7 @@ def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpt
                             mkpts1, color, text, path=None,
                             show_keypoints=False, margin=10,
                             opencv_display=False, opencv_title='',
-                            small_text=[], alpha=0.35):
+                            small_text=[], alpha=0.3):
     H0, W0, _ = image0.shape
     H1, W1, _ = image1.shape
     H = H0 + H1 + margin  # Total height by stacking
@@ -810,7 +1211,7 @@ def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpt
 
     # Scale factor for consistent visualization across scales.
     sc = min(W / 640., 2.0)
-
+    '''
     # Big text.
     Ht = int(30 * sc)  # Text height
     txt_color_fg = (255, 255, 255)
@@ -828,7 +1229,7 @@ def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpt
                     0.5*sc, txt_color_bg, 2, cv2.LINE_AA)
         cv2.putText(out, t, (int(8*sc), int(H-Ht*(i+.6))), cv2.FONT_HERSHEY_DUPLEX,
                     0.5*sc, txt_color_fg, 1, cv2.LINE_AA)
-
+    '''
     if path is not None:
         cv2.imwrite(str(path), out)
 
@@ -958,10 +1359,10 @@ def reconstruct_predictions(pred, indexes0, indexes1, pred_background=None, pred
     num_keypoints0 = indexes0.shape[0]
     num_keypoints1 = indexes1.shape[0]
     
-    matches0 = -torch.ones(num_keypoints0, dtype=torch.long, device=indexes0.device)
-    matches1 = -torch.ones(num_keypoints1, dtype=torch.long, device=indexes1.device)
-    matching_scores0 = torch.zeros(num_keypoints0, device=indexes0.device)
-    matching_scores1 = torch.zeros(num_keypoints1, device=indexes1.device)
+    matches0 = -torch.ones(num_keypoints0, dtype=torch.long, device=pred['descriptors0'].device)
+    matches1 = -torch.ones(num_keypoints1, dtype=torch.long, device=pred['descriptors1'].device)
+    matching_scores0 = torch.zeros(num_keypoints0, device=pred['descriptors0'].device)
+    matching_scores1 = torch.zeros(num_keypoints1, device=pred['descriptors1'].device)
     
     # Separate indexes for background and semantic components
     bg_indexes0 = torch.where(indexes0 == -1)[0]
@@ -971,7 +1372,7 @@ def reconstruct_predictions(pred, indexes0, indexes1, pred_background=None, pred
     
     # If pred_background is provided, update matches and scores for background
     if pred_background is not None:
-        if 'matches0' in pred_background:
+        if 'matches0' in pred_background: 
             matches0[bg_indexes0] = pred_background['matches0'].squeeze(0)
             matching_scores0[bg_indexes0] = pred_background['matching_scores0'].squeeze(0)
         if 'matches1' in pred_background:
@@ -995,7 +1396,91 @@ def reconstruct_predictions(pred, indexes0, indexes1, pred_background=None, pred
     
     return pred
 
-
 def error_colormap(x):
     return np.clip(
         np.stack([2-x*2, x*2, np.zeros_like(x), np.ones_like(x)], -1), 0, 1)
+
+# --- OPERATIONS ---
+
+def compute_sem_match_stat(
+    keypoints0, keypoints1,
+    indexes0, indexes1,
+    iou_indexes,
+    matches
+):
+    '''
+    Computes semantic match statistics and returns confusion matrix.
+
+    Returns:
+        A dictionary with percentages and confusion matrix:
+            'semantics_to_semantics_pct'
+            'background_to_background_pct'
+            'correct_mask_pct'
+            'confusion_matrix'
+    '''
+    matches = np.array(matches)
+    indexes0 = np.array(indexes0)
+    indexes1 = np.array(indexes1)
+
+    valid_matches_mask = matches != -1
+    valid_indices0 = np.where(valid_matches_mask)[0]
+    matched_indices1 = matches[valid_matches_mask]
+
+    total_matches = len(valid_indices0)
+    if total_matches == 0:
+        print('No valid matches provided')
+        return {
+            'semantics_to_semantics_pct': 0.0,
+            'background_to_background_pct': 0.0,
+            'correct_mask_pct': 0.0,
+            'confusion_matrix': np.array([[0, 0], [0, 0]])
+        }
+
+    idx0_labels = indexes0[valid_indices0]
+    idx1_labels = indexes1[matched_indices1]
+
+    # True labels: whether keypoints in image0 are foreground (1) or background (0)
+    true_labels = (idx0_labels >= 0).astype(int)
+    # Predicted labels: whether matched keypoints in image1 are foreground (1) or background (0)
+    predicted_labels = (idx1_labels >= 0).astype(int)
+
+    # Compute confusion matrix
+    conf_matrix = confusion_matrix(true_labels, predicted_labels, labels=[0, 1])
+
+    # Calculate percentages based on confusion matrix
+    # True Positives (TP): semantics to semantics
+    TP = conf_matrix[1, 1]
+    # True Negatives (TN): background to background
+    TN = conf_matrix[0, 0]
+    # Total valid matches
+    total = conf_matrix.sum()
+
+    # Correct mask matches
+    correct_mask = 0
+    total_iou_considered = 0
+
+    # Iterate through matched keypoints from image0 and image1
+    for idx0, idx1 in zip(idx0_labels, idx1_labels):
+        if idx0 >= 0 and idx0 < len(iou_indexes):  # Only consider keypoints on valid masks in image0
+            corresponding_idx1 = iou_indexes[idx0]
+            if corresponding_idx1 != -1:
+                total_iou_considered += 1  # Track keypoints for which there is a valid corresponding mask
+                if corresponding_idx1 == idx1:
+                    correct_mask += 1  # Count the number of correct matches to the corresponding mask
+
+    semantics_to_semantics_pct = (TP / total) * 100
+    background_to_background_pct = (TN / total) * 100
+    
+    # Calculate correct mask percentage considering only valid IoU mappings
+    if total_iou_considered > 0:
+        correct_mask_pct = (correct_mask / total_iou_considered) * 100
+    else:
+        correct_mask_pct = 0.0  # Set to 0 if no valid IoU-mapped keypoints are considered to avoid division by zero
+    print(semantics_to_semantics_pct,background_to_background_pct,correct_mask_pct)
+
+    return {
+        'semantics_to_semantics_pct': semantics_to_semantics_pct,
+        'background_to_background_pct': background_to_background_pct,
+        'correct_mask_pct': correct_mask_pct,
+        'confusion_matrix': conf_matrix
+    }

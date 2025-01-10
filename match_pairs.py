@@ -54,19 +54,23 @@ import cv2
 from ultralytics import YOLO
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 from sklearn.metrics import confusion_matrix
 
 from models.matching import Matching
 from models.utils import (compute_pose_error, compute_epipolar_error,
-                          estimate_pose, estimate_pose_3d, make_matching_plot,
-                          error_colormap, AverageTimer, pose_auc, read_rgb_image, read_image,
+                          estimate_pose, estimate_pose_3d, estimate_scale, make_matching_plot,
+                          error_colormap, AverageTimer, pose_auc, plot_3d_vectors, read_image, read_rgb_image,
                           rotate_intrinsics, rotate_pose_inplane,
-                          scale_intrinsics, frame2tensor,plot_pointcloud_with_rgb)
+                          scale_intrinsics, frame2tensor,project_images, compute_sem_match_stat)
+from models.LGutils import load_image_LG
 
 torch.set_grad_enabled(False)
 
 MONTH = 'march'
-DESC = 'U-64U-196U-FN-SPBG'
+#DESC = 'U-256U-256N-FN-SPBG'
+DESC = 'baseline-SIFT-SG'
+TYPE = 'long'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -80,10 +84,10 @@ if __name__ == '__main__':
         '--desc', type=str, default=f'{DESC}',
         help='Descriptor identifier')
     parser.add_argument(
-        '--input_pairs', type=str, default=f'assets/{MONTH}_test_pairs_gt.txt',
+        '--input_pairs', type=str, default=f'assets/{TYPE}/{MONTH}_test_pairs_gt.txt',
         help='Path to the list of image pairs')
     parser.add_argument(
-        '--input_dir', type=str, default=f'assets/{MONTH}/',
+        '--input_dir', type=str, default=f'assets/{TYPE}/{MONTH}/rgb/',
         help='Path to the directory that contains the images')
     parser.add_argument(
         '--output_dir', type=str, default=f'dump_match_pairs/{DESC}/{MONTH}',
@@ -156,8 +160,8 @@ if __name__ == '__main__':
     print(opt)
 
     if opt.month:
-        opt.input_pairs = f'assets/{opt.month}_test_pairs_gt.txt'
-        opt.input_dir = f'assets/{opt.month}/'
+        opt.input_pairs = f'assets/{TYPE}/{opt.month}_test_pairs_gt.txt'
+        opt.input_dir = f'assets/{TYPE}/{opt.month}/rgb/'
         opt.output_dir = f'dump_match_pairs/{opt.desc}/{opt.month}'
 
     assert not (opt.opencv_display and not opt.viz), 'Must use --viz with --opencv_display'
@@ -230,6 +234,10 @@ if __name__ == '__main__':
     conf_matrix_sum = None
     num_pairs = 0
     rp = [0.0, 0.0, 0.0]
+    sem2sem = []
+    bg2bg = []
+    ins2ins = []
+
     for i, pair in enumerate(pairs):
         name0, name1 = pair[:2]
         stem0, stem1 = Path(name0).stem, Path(name1).stem
@@ -337,6 +345,11 @@ if __name__ == '__main__':
             input_dir / name0, device, opt.resize, rot0, opt.resize_float)
         image1, inp1, scales1 = read_image(
             input_dir / name1, device, opt.resize, rot1, opt.resize_float)
+        
+        # Load image pair for lightglue SIFT
+        rgb0 = load_image_LG(input_dir / name0, opt.resize).cuda()
+        rgb1 = load_image_LG(input_dir / name1,opt.resize).cuda()
+        
         if image0 is None or image1 is None:
             print('Problem reading image pair: {} {}'.format(
                 input_dir/name0, input_dir/name1))
@@ -355,39 +368,41 @@ if __name__ == '__main__':
             result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False)
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
-                masks = np.array(result[0].masks.data.cpu())
+                masks = result[0].masks.data.cpu().numpy()
                 #combined_mask = np.any(masks, axis=0).astype(np.uint8)
                 #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
                 resized_masks0 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
                 for j in range(masks.shape[0]):
                     resized_masks0[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
-                    resized_masks0[j][resized_masks0[j] == 1] = 255  
+                    resized_masks0[j][resized_masks0[j] == 1] = 255
+                    resized_masks0[j][resized_masks0[j] != 255] = 0 
 
             yoloimg = cv2.imread(str(input_dir / name1))
             yoloimg = cv2.resize(yoloimg, (640, 640))
             result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False) 
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
-                masks = np.array(result[0].masks.data.cpu())
+                masks = result[0].masks.data.cpu().numpy()
                 #combined_mask = np.any(masks, axis=0).astype(np.uint8)
                 #masked_img = yoloimg * combined_mask[:,:,np.newaxis]
                 resized_masks1 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
                 for j in range(masks.shape[0]):
                     resized_masks1[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
                     resized_masks1[j][resized_masks1[j] == 1] = 255
-
+                    resized_masks1[j][resized_masks1[j] != 255] = 0
+                    
             timer.update('YOLO')
             # Added for YOLO END
             #Note: Utils line 428 was added to set z=0.0
             #'''
-            pred = matching({'image0': inp0, 'image1': inp1}, resized_masks0, resized_masks1)
+            pred = matching({'image0': inp0, 'image1': inp1, 'gs0': image0, 'gs1': image1, 'rgb0': rgb0, 'rgb1': rgb1}, resized_masks0, resized_masks1)
             pred = {k: v[0].cpu().numpy() for k, v in pred.items()}
             kpts0, kpts1 = pred['keypoints0'], pred['keypoints1']
             matches, conf = pred['matches0'], pred['matching_scores0']
             indexes0 = pred['indexes0']
             indexes1 = pred['indexes1']
             timer.update('matcher')
-            
+
             # Write the matches to disk.
             out_matches = {'keypoints0': kpts0, 'keypoints1': kpts1,
                            'matches': matches, 'match_confidence': conf,
@@ -397,7 +412,6 @@ if __name__ == '__main__':
             # New Code: Calculate and save confusion matrix
             # True labels: whether the keypoints in image0 and corresponding match in image1 are foreground or background
             valid_matches = matches != -1  # Matches that are valid (not -1)
-            
             matched_indexes0 = indexes0[valid_matches]  # Keypoints in image0 that have valid matches
             matched_indexes1 = matches[valid_matches]   # Corresponding keypoint indices in image1 from the matches
             matched_indexes1_labels = indexes1[matched_indexes1]  # Get labels of the matched keypoints in image1
@@ -478,38 +492,47 @@ if __name__ == '__main__':
             thresh = 1.  # In pixels relative to resized image size.
 
             # Get depth based pose estimation
-            #depth0 = cv2.imread(str(input_dir / "depth" / name0.replace("color", "depth")),cv2.IMREAD_GRAYSCALE)
-            #depth1 = cv2.imread(str(input_dir / "depth" / name1.replace("color", "depth")),cv2.IMREAD_GRAYSCALE)
+            depth0 = cv2.imread(str(input_dir).replace("rgb", "depth")+"/"+name0.replace("color", "depth"),cv2.IMREAD_GRAYSCALE)
+            depth1 = cv2.imread(str(input_dir).replace("rgb", "depth")+"/"+name1.replace("color", "depth"),cv2.IMREAD_GRAYSCALE)
             #ret = estimate_pose_3d(mkpts0, mkpts1, depth0, depth1, K0_original, K1_original, scales0, scales1)
             #plot_pointcloud_with_rgb(image0,depth0,K0)
             
             ret = estimate_pose(mkpts0, mkpts1, K0, K1, thresh)
             if ret is None:
                 err_t, err_R = np.inf, np.inf
+                R = np.eye(3)
+                t = np.zeros(3)
             else:
                 R, t, inliers = ret
-                rp += (t/100.0)
-                print(rp)
                 err_t, err_R = compute_pose_error(T_0to1, R, t)
 
             # Write the evaluation results to disk.
             out_eval = {'error_t': err_t,
                         'error_R': err_R,
-                        'precision': precision,
+                        'precision': precision,    
                         'matching_score': matching_score,
                         'num_correct': num_correct,
                         'epipolar_errors': epi_errs}
             np.savez(str(eval_path), **out_eval)
 
+            _, iou, iou_indexes = project_images(resized_masks0, T_0to1[:3, :3], T_0to1[:3, 3], K0, resized_masks1, False)    
+            stat = compute_sem_match_stat(kpts0, kpts1,indexes0, indexes1, iou_indexes, matches)     
+            sem2sem.append(stat['semantics_to_semantics_pct'])
+            bg2bg.append(stat['background_to_background_pct'])
+            ins2ins.append(stat['correct_mask_pct'])          
+
             # Convert ground truth and recovered rotation/translation to transformation matrices
             gt_pose = T_0to1
+            _, t_scaled = estimate_scale(mkpts0, mkpts1, depth0, depth1, scales0, scales1, K0_original, K1_original, R, t, abs(np.linalg.norm(gt_pose[:3,3])))
+
+            if t_scaled is None:
+                ret = None
             if ret is not None:
                 recovered_pose = np.eye(4)
                 recovered_pose[:3, :3] = R
-                recovered_pose[0, 3] = -t[2] # X_rec
-                recovered_pose[1, 3] = -t[0] # Y_rec=0.0
-                recovered_pose[2, 3] = 0.0 # Z_rec
+                recovered_pose[:3, 3] = t_scaled
                 rp += recovered_pose[:3, 3]
+                #plot_3d_vectors(t_scaled, gt_pose[:3,3])
             else:
                 recovered_pose = None
 
@@ -576,7 +599,7 @@ if __name__ == '__main__':
                 'Match Threshold: {:.2f}'.format(m_thresh),
                 'Image Pair: {}:{}'.format(stem0, stem1),
             ]
-
+            
             make_matching_plot(
                 image0, image1, kpts0, kpts1, mkpts0,
                 mkpts1, color, text, viz_eval_path,
@@ -594,6 +617,17 @@ if __name__ == '__main__':
         # Save the average confusion matrices with a different colormap ('viridis')
         save_confusion_matrix(avg_conf_matrix, "Average Confusion Matrix for Matches in Image 0",
                             conf_output_dir / "average_conf_matrix_image0.png", cmap='viridis')
+    # Create a DataFrame from the lists
+    data = {
+        'Semantics_to_Semantics_Percentage': sem2sem,
+        'Background_to_Background_Percentage': bg2bg,
+        'Correct_Mask_Percentage': ins2ins
+    }
+    df = pd.DataFrame(data)
+    # Save the DataFrame as a CSV file
+    csv_filename = f'{opt.month}_{opt.desc}_semantic_match_statistics.csv'
+    df.to_csv(csv_filename, index=False)
+
     #'''
     if opt.eval:
         # Collate the results into a final table and print to terminal.

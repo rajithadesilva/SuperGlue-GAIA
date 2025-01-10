@@ -234,8 +234,8 @@ class SuperGlue(nn.Module):
         if kpts0.shape[1] == 0 or kpts1.shape[1] == 0:  # no keypoints
             shape0, shape1 = kpts0.shape[:-1], kpts1.shape[:-1]
             return {
-                'matches0': kpts0.new_full(shape0, -1, dtype=torch.int),
-                'matches1': kpts1.new_full(shape1, -1, dtype=torch.int),
+                'matches0': kpts0.new_full(shape0, -1, dtype=torch.long),
+                'matches1': kpts1.new_full(shape1, -1, dtype=torch.long),
                 'matching_scores0': kpts0.new_zeros(shape0),
                 'matching_scores1': kpts1.new_zeros(shape1),
             }
