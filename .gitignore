@@ -3,7 +3,7 @@
 *.swp
 dump_*
 outputs/*
-assets/*
+assets/
 test/*
 vps/*
 versions/*
