@@ -283,7 +283,7 @@ class Extractor(torch.nn.Module):
             
             
             for idx, desc in enumerate(feats["descriptors"][0]):
-                #'''
+                '''
                 if mask_indexes[idx]>= 0:
                     desc = self.siftenc(desc)
                     desc = torch.nn.functional.normalize(desc, p=2, dim=0)
@@ -301,21 +301,28 @@ class Extractor(torch.nn.Module):
                     encoded = (encoded/torch.max(encoded))*torch.max(desc) # Only for SIFT + LG with KSI : Since SIFT is not a normalised descriptor
                     bottleneck_vector = (encoded.cpu().numpy())
                     #semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
-                    semantic_descriptors.append(desc.cpu().numpy())#+bottleneck_vector[0])
+                    semantic_descriptors.append(desc.cpu().numpy()+bottleneck_vector[0])
 
                 else:
                     desc = self.siftenc(desc)
                     desc = torch.nn.functional.normalize(desc, p=2, dim=0)
                     semantic_descriptors.append(desc.cpu().numpy())
-                    #'''
+                    '''
+                desc = self.siftenc(desc)
+                #desc = torch.nn.functional.normalize(desc, p=2, dim=0)
+                semantic_descriptors.append(desc.cpu().numpy())
 
         else:
                 mask_indexes = np.full((len(feats["keypoints"][0])), -1, dtype=np.int64)
-                semantic_descriptors = feats["descriptors"].squeeze(0).cpu()
+                for idx, desc in enumerate(feats["descriptors"][0]):
+                    desc = self.siftenc(desc)
+                    #desc = torch.nn.functional.normalize(desc, p=2, dim=0)
+                    semantic_descriptors.append(desc.cpu().numpy())
+                #semantic_descriptors = feats["descriptors"].squeeze(0).cpu()
 
         semantic_descriptors = np.array(semantic_descriptors)
         feats["descriptors"] = torch.tensor(semantic_descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for unbranched
-        feats["descriptors"] = torch.nn.functional.normalize(feats["descriptors"], p=2, dim=1)
+        #feats["descriptors"] = torch.nn.functional.normalize(feats["descriptors"], p=2, dim=1)
         feats["indexes"] = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0)
         
         return feats

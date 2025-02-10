@@ -278,9 +278,9 @@ def plot_colored_cumulative_trajectory(desc1, desc2, month, output_trajectory_fi
 
 if __name__ == "__main__":
     # Construct the data path
-    #desc = 'U-256U-256N-FN-SPBG'
-    desc = 'baseline'
-    month = 'september'  # Replace with actual month
+    desc = 'U-256U-256N-FN-SPBG'
+    #desc = 'baseline'
+    month = 'june'  # Replace with actual month
     data_dir = Path(f'dump_match_pairs/{desc}/{month}/')
     npz_files = list(data_dir.glob('*_poses.npz'))
     npz_files = sorted(npz_files, key=lambda x: int(re.search(rf'{month}_color_image_(\d+)_', x.name).group(1)))

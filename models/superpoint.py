@@ -392,6 +392,7 @@ class SuperPoint(nn.Module):
 
         #Modified to fit semantics until here
         #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
+
         return {
             'keypoints': keypoints,
             'scores': scores,

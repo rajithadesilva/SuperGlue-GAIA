@@ -67,9 +67,9 @@ from models.LGutils import load_image_LG
 
 torch.set_grad_enabled(False)
 
-MONTH = 'march'
-#DESC = 'U-256U-256N-FN-SPBG'
-DESC = 'baseline-SIFT-SG'
+MONTH = 'september'
+DESC = 'U-256U-256N-FN-SIFT'
+#DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
 
 if __name__ == '__main__':

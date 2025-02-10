@@ -92,7 +92,7 @@ if __name__ == '__main__':
         '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
-        '--max_keypoints', type=int, default=100,
+        '--max_keypoints', type=int, default=-1,
         help='Maximum number of keypoints detected by Superpoint'
              ' (\'-1\' keeps all keypoints)')
     parser.add_argument(
@@ -152,14 +152,14 @@ if __name__ == '__main__':
     yolo = YOLO("./models/weights/yolo.pt").to('cpu')
     
     matching = Matching(config).eval().to(device)
-    keys = ['keypoints', 'scores', 'descriptors']
+    keys = ['keypoints', 'scores', 'descriptors', 'indexes']
 
     vs = VideoStreamer(opt.input, opt.resize, opt.skip,
                        opt.image_glob, opt.max_length)
     frame, ret = vs.next_frame()
 
-    frame = cv2.imread("assets/long/march/rgb/march_color_image_0.png")
-    frame = cv2.resize(frame,(640,480),cv2.INTER_AREA)
+    #frame = cv2.imread("assets/long/march/rgb/march_color_image_0.png")
+    #frame = cv2.resize(frame,(640,480),cv2.INTER_AREA)
 
     rgb0 = frame
     assert ret, 'Error when reading the first frame (try different --input?)'
@@ -265,11 +265,20 @@ if __name__ == '__main__':
         confidence = pred['matching_scores0'][0].cpu().numpy()
         timer.update('forward')
 
+        # Add valid parameter to semantic keypoints only
+        #'''
+        sem = last_data['indexes0'][0].cpu().numpy()
+        valid = sem > -1
+        mkpts0 = kpts0[valid]
+        mkpts1 = kpts1[matches[valid]]
+        color = cm.jet(confidence[valid])
+
+        '''
         valid = matches > -1
         mkpts0 = kpts0[valid]
         mkpts1 = kpts1[matches[valid]]
         color = cm.jet(confidence[valid])
-        print(len(mkpts0))
+        #'''
         if len(mkpts1) != 0:
             total_kp += len(mkpts1)
             total_confidence += np.mean(confidence[valid])
@@ -334,14 +343,14 @@ if __name__ == '__main__':
                 opt.show_keypoints = not opt.show_keypoints
 
         # Update last_data and last_frame for the next iteration
-        """
+        #"""
         last_data = {k+'0': pred[k+'1'] for k in keys}
         last_data['image0'] = frame_tensor
         last_frame = frame
         last_image_id = (vs.i - 1)
         rgb0 = rgb1
         combined_mask0 = combined_mask1
-        """
+        #"""
 
         timer.update('viz')
         timer.print()

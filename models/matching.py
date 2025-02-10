@@ -43,7 +43,8 @@ import torch
 import numpy as np
 from .superpoint import SuperPoint
 from .orb_encoder import ORB
-from .sift import SIFT
+from .sift_encoder import SIFT
+#from .sift import SIFT
 from .superglue import SuperGlue
 from .lightglue import LightGlue
 #from .mdgat import MDGAT
@@ -56,7 +57,8 @@ class Matching(torch.nn.Module):
         super().__init__()
         self.superpoint = SuperPoint(config.get('superpoint', {}))
         #self.orb = ORB()
-        self.sift = SIFT().eval().cuda()
+        #self.sift = SIFT().eval().cuda() # LG SIFT
+        self.sift = SIFT()
         self.superglue = SuperGlue(config.get('superglue', {}))
         self.lightglue = LightGlue(features='sift').eval().cuda()  # load the matcher
 
@@ -70,15 +72,17 @@ class Matching(torch.nn.Module):
         
         # Extract SuperPoint (keypoints, scores, descriptors) if not provided
         if 'keypoints0' not in data:
-            #pred0 = self.superpoint({'image': data['image0']}, sem_background0)
+            pred0 = self.superpoint({'image': data['image0']}, sem_background0)
             #pred0 = self.orb({'image': data['gs0']}, sem_background0)
-            pred0 = self.sift.extract(data['rgb0'], sem_background0)
+            #pred0 = self.sift({'image': data['gs0']}, sem_background0)
+            #pred0 = self.sift.extract(data['rgb0'], sem_background0)
             pred = {**pred, **{k+'0': v for k, v in pred0.items()}}
             
         if 'keypoints1' not in data:
-            #pred1 = self.superpoint({'image': data['image1']}, sem_background1)
+            pred1 = self.superpoint({'image': data['image1']}, sem_background1)
             #pred1 = self.orb({'image': data['gs1']}, sem_background1)
-            pred1 = self.sift.extract(data['rgb1'], sem_background1)
+            #pred1 = self.sift({'image': data['gs1']}, sem_background1)
+            #pred1 = self.sift.extract(data['rgb1'], sem_background1)
             pred = {**pred, **{k+'1': v for k, v in pred1.items()}}
         
         # Batch all features
@@ -90,10 +94,10 @@ class Matching(torch.nn.Module):
 
         #'''
         # Match all together
-        data['scores0'] = data.pop('keypoint_scores0') # For sift
-        data['scores1'] = data.pop('keypoint_scores1') # For sift
-        data['descriptors0'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
-        data['descriptors1'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
+        #data['scores0'] = data.pop('keypoint_scores0') # For sift LG
+        #data['scores1'] = data.pop('keypoint_scores1') # For siftn LG
+        #data['descriptors0'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
+        #data['descriptors1'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
         pred = {**pred, **self.superglue(data)} 
 
         # LightGlue with SuperPoint
