@@ -53,8 +53,9 @@ import matplotlib.pyplot as plt
 import matplotlib
 from sklearn.metrics import confusion_matrix
 import re
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 
+import csv
 
 class AverageTimer:
     """ Class to help manage printing simple timing of code execution. """
@@ -91,6 +92,12 @@ class AverageTimer:
                 print('%s=%.3f' % (key, val), end=' ')
                 total += val
         print('total=%.3f sec {%.1f FPS}' % (total, 1./total), end=' ')
+
+        # # save time and lable to a csv file
+        # with open("timer.csv", mode="a", newline="") as file:
+        #     writer = csv.writer(file)
+        #     writer.writerow([text, str(key +" (sec)"), val, "total", total, "FPS", str((1./total))])
+
         if self.newline:
             print(flush=True)
         else:

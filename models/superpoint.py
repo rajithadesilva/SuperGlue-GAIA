@@ -45,6 +45,9 @@ import torch
 from torch import nn
 import numpy as np
 
+import time
+import csv
+
 ENCDIM = 256
 
 def simple_nms(scores, nms_radius: int):
@@ -280,6 +283,9 @@ class SuperPoint(nn.Module):
         #'''
     def forward(self, data, masks):
         """ Compute keypoints, scores, descriptors for image """
+        # TODO start keypoint extraction timer, this is just for one time not the image pair
+        start_time_keypoint_extraction = time.time()
+
         # Shared Encoder
         x = self.relu(self.conv1a(data['image']))
         x = self.relu(self.conv1b(x))
@@ -327,12 +333,50 @@ class SuperPoint(nn.Module):
         descriptors = self.convDb(cDa)
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
         descriptors = [sample_descriptors(k[None], d[None], 8)[0]
-               for k, d in zip(keypoints, descriptors)]
+               for k, d in zip(keypoints, descriptors)]        
+
+        end_time_keypoint_extraction = time.time()
+
+        elapsed_time_keypoint_extraction = end_time_keypoint_extraction - start_time_keypoint_extraction
+        # print(f"keypoint extraction took {elapsed_time_keypoint_extraction:.6f} seconds")
+        # Save to CSV
+        with open("timer_keypoint_extraction.csv", mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time_keypoint_extraction])
+        # TODO end keypoint extraction timer
         
+        # TODO start KSI keypoint semantic integration timer
+        start_time_ksi_keypoint_semantic_integration = time.time()
+
         #Modified to fit semantics from here
         if masks is not None:
             mask_indexes = find_nearest_masks_for_keypoints(masks, keypoints[0].cpu().numpy())
-           
+
+            embeddings = []
+            # TODO start semantic encoder timer
+            start_time_semantic_encoder = time.time()
+
+            for mask in masks:
+                mask = torch.tensor(mask, dtype=torch.float32).to(self.device)
+                mask = torch.nn.functional.interpolate(
+                    mask.unsqueeze(0).unsqueeze(0),
+                    size=(128, 128),  # Adjust to expected input size
+                    mode='bilinear',
+                    align_corners=False
+                )
+                emb = self.semenc(mask)
+                embeddings.append(emb.cpu().numpy())
+
+                end_time_semantic_encoder = time.time()
+
+                elapsed_time_semantic_encoder = end_time_semantic_encoder - start_time_semantic_encoder
+                # print(f"semantic_encoder took {elapsed_time_keypoint_extraction:.6f} seconds")
+                # Save to CSV
+                with open("timer_semantic_encoder.csv", mode="a", newline="") as file:
+                    writer = csv.writer(file)
+                    writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time_semantic_encoder])
+                # TODO end semantic encoder timer
+
             semantic_descriptors = []
             for idx, desc in enumerate(descriptors[0].T):
                 #'''
@@ -341,20 +385,8 @@ class SuperPoint(nn.Module):
                     #reduced_desc = self.LinearEncoder(desc)
                     ##reduced_desc = torch.nn.functional.normalize(reduced_desc, p=2, dim=0)
                     #reduced_desc = reduced_desc.cpu().numpy()
-
-                    sem_background = masks[mask_indexes[idx]]
-                    sem_background = torch.tensor(sem_background, dtype=torch.float32).to(self.device)
-                    sem_background = torch.nn.functional.interpolate(
-                                        sem_background.unsqueeze(0).unsqueeze(0),
-                                        size=(128, 128),  # Adjust to expected input size
-                                        mode='bilinear',
-                                        align_corners=False
-                                    )
-                    encoded = self.semenc(sem_background)
-                    #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
-                    bottleneck_vector = (encoded.cpu().numpy())
                     #semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
-                    semantic_descriptors.append(desc.cpu().numpy()+bottleneck_vector[0])
+                    semantic_descriptors.append(desc.cpu().numpy()+embeddings[mask_indexes[idx]][0])
                     
                     
                 else:
@@ -389,6 +421,16 @@ class SuperPoint(nn.Module):
         #descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).unsqueeze(0) #for branched
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
         mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0)
+
+        end_time_ksi_keypoint_semantic_integration = time.time()
+
+        elapsed_time_ksi_keypoint_semantic_integration = end_time_ksi_keypoint_semantic_integration - start_time_ksi_keypoint_semantic_integration
+        # print(f"ksi_keypoint_semantic_integration took {elapsed_time_ksi_keypoint_semantic_integration:.6f} seconds")
+        # Save to CSV
+        with open("timer_ksi_keypoint_semantic_integration.csv", mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time_ksi_keypoint_semantic_integration])
+        # TODO END KSI keypoint semantic integration timer
 
         #Modified to fit semantics until here
         #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)

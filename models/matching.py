@@ -51,6 +51,9 @@ from .lightglue import LightGlue
 
 from .utils import DimSqueeze, concatenate_dictionaries, reconstruct_predictions
 
+import time
+import csv
+
 class Matching(torch.nn.Module):
     """ Image Matching Frontend (Semantics + SuperGlue) """
     def __init__(self, config={}):
@@ -98,7 +101,19 @@ class Matching(torch.nn.Module):
         #data['scores1'] = data.pop('keypoint_scores1') # For siftn LG
         #data['descriptors0'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
         #data['descriptors1'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
-        pred = {**pred, **self.superglue(data)} 
+
+        # TODO start matching timer for a pair of images
+        start_time = time.time()
+        pred = {**pred, **self.superglue(data)}
+        end_time = time.time()
+
+        elapsed_time = end_time - start_time
+        # print(f"superglue matching took {elapsed_time:.6f} seconds")
+        # Save to CSV
+        with open("timer_superglue_matching.csv", mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time])
+        # TODO end matching timer
 
         # LightGlue with SuperPoint
         #pred0['descriptors'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)

@@ -65,9 +65,12 @@ from models.utils import (compute_pose_error, compute_epipolar_error,
                           scale_intrinsics, frame2tensor,project_images, compute_sem_match_stat)
 from models.LGutils import load_image_LG
 
+import time
+import csv
+
 torch.set_grad_enabled(False)
 
-MONTH = 'september'
+MONTH = 'may'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
@@ -356,6 +359,8 @@ if __name__ == '__main__':
             exit(1)
         timer.update('load_image')
 
+        # timer.update('Panopitic Segmentation YOLO Start') # TODO Timer for panopitic segmentation for one image pair, want average of this for whole dataset at the end
+        start_time = time.time()
         if do_match:
             # Perform the matching.
             #'''
@@ -391,7 +396,16 @@ if __name__ == '__main__':
                     resized_masks1[j][resized_masks1[j] == 1] = 255
                     resized_masks1[j][resized_masks1[j] != 255] = 0
                     
-            timer.update('YOLO')
+            end_time = time.time()
+
+            elapsed_time = end_time - start_time
+            # print(f"Panopitic Segmentation YOLO took {elapsed_time:.6f} seconds")
+            # Save to CSV
+            with open("timer_panopitic_segmentation_yolo.csv", mode="a", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time])
+            # timer.update('Panopitic Segmentation YOLO End')
+
             # Added for YOLO END
             #Note: Utils line 428 was added to set z=0.0
             #'''
