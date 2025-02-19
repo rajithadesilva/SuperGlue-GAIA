@@ -230,7 +230,9 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
-    yolo = YOLO("./models/weights/yolo.pt").to('cpu')
+    #model = YOLO("./models/weights/yolo.pt").to(device)
+    #model.export(format="engine")
+    yolo = YOLO("./models/weights/yolo.engine", task='segment')
     timer = AverageTimer(newline=True)
     epis = []
 
@@ -370,7 +372,7 @@ if __name__ == '__main__':
 
             yoloimg = cv2.imread(str(input_dir / name0))
             yoloimg = cv2.resize(yoloimg, (640, 640))
-            result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False)
+            result = yolo(yoloimg,conf=0.2, classes=[0,4], verbose=False, device=device)
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = result[0].masks.data.cpu().numpy()
@@ -384,7 +386,7 @@ if __name__ == '__main__':
 
             yoloimg = cv2.imread(str(input_dir / name1))
             yoloimg = cv2.resize(yoloimg, (640, 640))
-            result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False) 
+            result = yolo(yoloimg,conf=0.2, classes=[0,4], verbose=False, device=device) 
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = result[0].masks.data.cpu().numpy()
@@ -395,7 +397,6 @@ if __name__ == '__main__':
                     resized_masks1[j] = cv2.resize(masks[j], (640, 480), interpolation=cv2.INTER_NEAREST)
                     resized_masks1[j][resized_masks1[j] == 1] = 255
                     resized_masks1[j][resized_masks1[j] != 255] = 0
-                    
             end_time = time.time()
 
             elapsed_time = end_time - start_time
