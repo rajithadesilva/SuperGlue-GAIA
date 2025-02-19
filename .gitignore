@@ -3,6 +3,7 @@
 *.swp
 dump_*
 outputs/*
+models/weights/*
 assets/
 test/*
 vps/*
