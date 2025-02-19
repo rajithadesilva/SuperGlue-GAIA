@@ -353,10 +353,11 @@ class SuperPoint(nn.Module):
             mask_indexes = find_nearest_masks_for_keypoints(masks, keypoints[0].cpu().numpy())
 
             embeddings = []
-            # TODO start semantic encoder timer
-            start_time_semantic_encoder = time.time()
 
             for mask in masks:
+                # TODO start semantic encoder timer
+                start_time_semantic_encoder = time.time()
+
                 mask = torch.tensor(mask, dtype=torch.float32).to(self.device)
                 mask = torch.nn.functional.interpolate(
                     mask.unsqueeze(0).unsqueeze(0),
