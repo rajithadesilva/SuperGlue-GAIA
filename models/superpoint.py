@@ -347,6 +347,7 @@ class SuperPoint(nn.Module):
         
         # TODO start KSI keypoint semantic integration timer
         start_time_ksi_keypoint_semantic_integration = time.time()
+        elapsed_times_semantic_encoder = []  # List to store times
 
         #Modified to fit semantics from here
         if masks is not None:
@@ -357,6 +358,7 @@ class SuperPoint(nn.Module):
             for mask in masks:
                 # TODO start semantic encoder timer
                 start_time_semantic_encoder = time.time()
+                
                 mask = torch.tensor(mask, dtype=torch.float32).to(self.device)
                 mask = torch.nn.functional.interpolate(
                     mask.unsqueeze(0).unsqueeze(0),
@@ -368,13 +370,8 @@ class SuperPoint(nn.Module):
                 embeddings.append(emb.cpu().numpy())
 
                 end_time_semantic_encoder = time.time()
-
-                elapsed_time_semantic_encoder = end_time_semantic_encoder - start_time_semantic_encoder
-                # print(f"semantic_encoder took {elapsed_time_keypoint_extraction:.6f} seconds")
-                # Save to CSV
-                with open("timer_semantic_encoder.csv", mode="a", newline="") as file:
-                    writer = csv.writer(file)
-                    writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time_semantic_encoder])
+                elapsed_time_semantic_encoder = end_time_semantic_encoder - start_time_semantic_encoder                
+                elapsed_times_semantic_encoder.append([time.strftime("%Y-%m-%d %H:%M:%S"), elapsed_time_semantic_encoder])
                 # TODO end semantic encoder timer
 
             semantic_descriptors = []
@@ -433,7 +430,12 @@ class SuperPoint(nn.Module):
         # TODO END KSI keypoint semantic integration timer
 
         #Modified to fit semantics until here
-        #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)
+        #mask_indexes = torch.tensor(mask_indexes, dtype=torch.int64).unsqueeze(0).to(self.device)        
+
+        # Write recorded times to CSV
+        with open("timer_semantic_encoder.csv", mode="a", newline="") as file:
+            writer_2 = csv.writer(file)
+            writer_2.writerows(elapsed_times_semantic_encoder)
 
         return {
             'keypoints': keypoints,

@@ -48,6 +48,7 @@ from pathlib import Path
 import argparse
 import random
 import numpy as np
+np.bool = bool # fixes numpy bool error in jetson docker container.
 import matplotlib.cm as cm
 import torch
 import cv2
@@ -230,8 +231,8 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
-    #model = YOLO("./models/weights/yolo.pt").to(device)
-    #model.export(format="engine")
+    # model = YOLO("./models/weights/yolo.pt").to(device)
+    # model.export(format="engine")
     yolo = YOLO("./models/weights/yolo.engine", task='segment')
     timer = AverageTimer(newline=True)
     epis = []
