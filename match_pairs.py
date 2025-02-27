@@ -70,7 +70,7 @@ import csv
 
 torch.set_grad_enabled(False)
 
-MONTH = 'may'
+MONTH = 'september'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
@@ -230,7 +230,10 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
-    yolo = YOLO("./models/weights/yolo.pt").to('cpu')
+    # Load the YOLO model
+    #model = YOLO("./models/weights/yolo.pt").to(device)
+    #model.export(format="engine")
+    yolo = YOLO("./models/weights/yolo.engine", task='segment')
     timer = AverageTimer(newline=True)
     epis = []
 
