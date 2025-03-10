@@ -231,8 +231,8 @@ if __name__ == '__main__':
               'directory \"{}\"'.format(output_dir))
 
     # Load the YOLO model
-    #model = YOLO("./models/weights/yolo.pt").to(device)
-    #model.export(format="engine")
+    # model = YOLO("./models/weights/yolo.pt").to(device)
+    # model.export(format="engine")
     yolo = YOLO("./models/weights/yolo.engine", task='segment')
     timer = AverageTimer(newline=True)
     epis = []
