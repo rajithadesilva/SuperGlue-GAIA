@@ -71,7 +71,7 @@ import csv
 
 torch.set_grad_enabled(False)
 
-MONTH = 'september'
+MONTH = 'june'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'

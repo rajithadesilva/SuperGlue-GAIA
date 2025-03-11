@@ -166,43 +166,40 @@ class Encoder(nn.Module):
         encoded = self.encoder(x)
         return encoded
 
-def find_nearest_masks_for_keypoints(masks, keypoints):
-    N = masks.shape[0]
-    result_indices = []
-    points_with_255 = []
+def find_nearest_masks_for_keypoints(masks, keypoints, distance_threshold=2.0):
+    N, H, W = masks.shape
 
+    # Step 1: Compress masks into single indexed mask
+    compressed_mask = np.full((H, W), -1, dtype=np.int32)
     for i in range(N):
-            # Get coordinates of all points with value 255 in the current mask
-            points_with_255.append(np.argwhere(masks[i] == 255))
+        compressed_mask[masks[i] == 255] = i
 
-    for keypoint in keypoints:
-        x, y = keypoint
-        min_distance = float('inf')
-        nearest_mask_index = -1
-        
-        for i in range(N):            
-            if points_with_255[i].size == 0:
-                # If there are no points with 255 in this mask, skip it
-                continue
-            
-            # Calculate the squared Euclidean distance to the keypoint for each point with value 255
-            distances = np.sqrt((points_with_255[i][:, 0] - y) ** 2 + (points_with_255[i][:, 1] - x) ** 2)
-            
-            # Find the minimum distance in this mask
-            min_dist_in_mask = np.min(distances)
-            
-            # Update the nearest mask and distance if the current one is closer
-            if min_dist_in_mask < min_distance:
-                min_distance = min_dist_in_mask
-                nearest_mask_index = i
-        
-        # Store the nearest mask index for the current keypoint
-        if min_distance < 2.0:
-            result_indices.append(nearest_mask_index)
-        else:
-            result_indices.append(-1)
-    
-    return np.array(result_indices)
+    keypoints = np.asarray(keypoints)
+    num_keypoints = keypoints.shape[0]
+
+    # Step 2: Get coordinates of all mask pixels
+    mask_pixel_coords = np.argwhere(compressed_mask >= 0)  # shape (num_mask_pixels, 2)
+    mask_pixel_indices = compressed_mask[mask_pixel_coords[:,0], mask_pixel_coords[:,1]]
+
+    if mask_pixel_coords.size == 0:
+        return -np.ones(num_keypoints, dtype=np.int32)
+
+    # Step 2: Compute all distances (vectorized)
+    # keypoints shape: (num_keypoints, 1, 2)
+    kp_expanded = keypoints[:, None, :]  # (num_keypoints, 1, 2)
+    mask_pixel_coords_swapped = mask_pixel_coords[:, ::-1]  # swap to (x,y)
+
+    # Compute distances vectorized
+    distances = np.linalg.norm(kp_expanded := keypoints[:, None, :] - mask_pixel_coords_swapped[None, :, :], axis=2)
+
+    # Find minimum distances and indices
+    min_distances = np.min(distances, axis=1)
+    min_indices = np.argmin(distances, axis=1)
+
+    # Apply threshold
+    nearest_mask_indices = np.where(min_distances < distance_threshold, mask_pixel_indices[min_indices], -1)
+
+    return nearest_mask_indices
 
 class SuperPoint(nn.Module):
     """SuperPoint Convolutional Detector and Descriptor
