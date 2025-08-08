@@ -355,6 +355,7 @@ class SuperPoint(nn.Module):
                     bottleneck_vector = (encoded.cpu().numpy())
                     #semantic_descriptors.append(np.concatenate((bottleneck_vector[0],reduced_desc)))
                     semantic_descriptors.append(desc.cpu().numpy()+bottleneck_vector[0])
+                    #semantic_descriptors.append(desc.cpu().numpy())
                     
                     
                 else:

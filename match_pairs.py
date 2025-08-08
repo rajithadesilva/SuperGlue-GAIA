@@ -93,6 +93,12 @@ if __name__ == '__main__':
         '--output_dir', type=str, default=f'dump_match_pairs/{DESC}/{MONTH}',
         help='Path to the directory in which the .npz results and optionally,'
              'the visualization images are written')
+    parser.add_argument(
+        '--extractor', type=str, default=f'superpoint',
+        help='Keypoint extractor: superpoint,sfd2,sift,orb')
+    parser.add_argument(
+        '--matcher', type=str, default=f'superglue',
+        help='Descriptor matcher: superglue,lightglue, mnn')
 
     parser.add_argument(
         '--max_length', type=int, default=-1,
@@ -201,6 +207,8 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() and not opt.force_cpu else 'cpu'
     print('Running inference on device \"{}\"'.format(device))
     config = {
+        'extractor': opt.extractor,
+        'matcher': opt.matcher,
         'superpoint': {
             'nms_radius': opt.nms_radius,
             'keypoint_threshold': opt.keypoint_threshold,

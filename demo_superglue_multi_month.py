@@ -154,9 +154,13 @@ if __name__ == '__main__':
     matching = Matching(config).eval().to(device)
     keys = ['keypoints', 'scores', 'descriptors', 'indexes']
 
+    vs_ref = VideoStreamer('assets/matches/blt2/march', opt.resize, opt.skip,
+                       opt.image_glob, opt.max_length)
+
     vs = VideoStreamer(opt.input, opt.resize, opt.skip,
                        opt.image_glob, opt.max_length)
-    frame, ret = vs.next_frame()
+    frame, ret = vs_ref.next_frame()
+    #frame, ret = vs.next_frame()
 
     #frame = cv2.imread("assets/long/march/rgb/march_color_image_0.png")
     #frame = cv2.resize(frame,(640,480),cv2.INTER_AREA)
@@ -194,7 +198,7 @@ if __name__ == '__main__':
     last_data = {k+'0': last_data[k] for k in keys}
     last_data['image0'] = frame_tensor
     last_frame = frame
-    last_image_id = 0
+    last_image_id = vs_ref.i
 
     if opt.output_dir is not None:
         print('==> Will write outputs to {}'.format(opt.output_dir))
@@ -227,7 +231,7 @@ if __name__ == '__main__':
             print('Finished demo_superglue.py')
             break
         timer.update('data')
-        stem0, stem1 = last_image_id, vs.i - 1
+        stem0, stem1 = vs_ref.i - 1, vs.i - 1
         eval_path = Path(opt.output_dir) / '{}_{}_evaluation.npz'.format(stem0, stem1)
         
         yoloimg = frame #cv2.cvtColor(frame,cv2.COLOR_GRAY2RGB)
@@ -313,7 +317,7 @@ if __name__ == '__main__':
                     'mkpts1': mkpts1,
                     'matches': matches,
                     'confidence': confidence}
-        np.savez(str(eval_path), **out_eval)
+        #np.savez(str(eval_path), **out_eval)
 
         if not opt.no_display:
             cv2.imshow('SuperGlue matches', out)
@@ -346,10 +350,39 @@ if __name__ == '__main__':
 
         # Update last_data and last_frame for the next iteration
         #"""
+        ##########################################
+        frame, ret = vs_ref.next_frame()
+        rgb1 = frame
+        if not ret:
+            print('Finished demo_superglue.py')
+            break
+        
+        yoloimg = frame #cv2.cvtColor(frame,cv2.COLOR_GRAY2RGB)
+        yoloimg = cv2.resize(yoloimg, (640, 640))
+
+        result = yolo.predict(yoloimg,conf=0.2, classes=[0, 4], verbose=False)
+        if result[0].masks is not None:
+            masks = np.array(result[0].masks.data.cpu())
+            combined_mask1 = np.any(masks, axis=0).astype(np.uint8)
+            #combined_mask[combined_mask == 1] = 255
+            masked_img = yoloimg * combined_mask1[:,:,np.newaxis]
+            frame = cv2.resize(masked_img, (640, 480))
+            resized_masks1 = np.empty((masks.shape[0], 480, 640), dtype=masks.dtype)
+            for i in range(masks.shape[0]):
+                resized_masks1[i] = cv2.resize(masks[i], (640, 480), interpolation=cv2.INTER_NEAREST)
+                resized_masks1[i][resized_masks1[i] == 1] = 255
+            frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)         
+        else: 
+            continue
+
+        frame_tensor = frame2tensor(cv2.cvtColor(rgb1,cv2.COLOR_RGB2GRAY), device)
+
+        pred = matching({**last_data, 'image1': frame_tensor},resized_masks0,resized_masks1)
+        ##############################################
         last_data = {k+'0': pred[k+'1'] for k in keys}
         last_data['image0'] = frame_tensor
         last_frame = frame
-        last_image_id = (vs.i - 1)
+        last_image_id = (vs_ref.i - 1)
         rgb0 = rgb1
         combined_mask0 = combined_mask1
         #"""

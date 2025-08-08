@@ -1170,7 +1170,7 @@ def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpt
                             mkpts1, color, text, path=None,
                             show_keypoints=False, margin=10,
                             opencv_display=False, opencv_title='',
-                            small_text=[], alpha=0.3):
+                            small_text=[], alpha=0.5):
     H0, W0, _ = image0.shape
     H1, W1, _ = image1.shape
     H = H0 + H1 + margin  # Total height by stacking
@@ -1199,6 +1199,7 @@ def make_matching_plot_fast_rgb(image0, image1, mask0, mask1, kpts0, kpts1, mkpt
                        lineType=cv2.LINE_AA)
 
     mkpts0, mkpts1 = np.round(mkpts0).astype(int), np.round(mkpts1).astype(int)
+    #print(len(mkpts0), len(mkpts1))
     color = (np.array(color[:, :3])*255).astype(int)[:, ::-1]
     for (x0, y0), (x1, y1), c in zip(mkpts0, mkpts1, color):
         c = c.tolist()
