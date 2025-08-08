@@ -235,7 +235,7 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
-    yolo = YOLO("./models/weights/yolo.pt").to('cpu')
+    yolo = YOLO("./models/weights/yolo.pt").to(device)
     timer = AverageTimer(newline=True)
     epis = []
 
