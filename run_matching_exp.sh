@@ -10,7 +10,7 @@ months2=("march" "april" "may" "june" "september")
 #descriptor1="64N-192U-FN"
 #descriptor="branching-semantic-keypoint-other"
 #descriptor2="U-256U-256N-FN-SIFT"
-descriptor2="baseline-SIFT-SG"
+descriptor2="baseline-sfd2"
 
 # Loop over each month and run the command for the first descriptor
 #for month in "${months1[@]}"
@@ -23,7 +23,7 @@ descriptor2="baseline-SIFT-SG"
 for month in "${months2[@]}"
 do
     echo "Running match_pairs.py for month: $month with descriptor: $descriptor2"
-    ./match_pairs.py --eval --viz --month "$month" --desc "$descriptor2"
+    ./match_pairs.py --eval --viz --month "$month" --desc "$descriptor2" --extractor sfd2 --matcher nnm
 done
 
 echo "All tasks completed."

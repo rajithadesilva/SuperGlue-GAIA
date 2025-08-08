@@ -57,6 +57,7 @@ import seaborn as sns
 import pandas as pd
 from sklearn.metrics import confusion_matrix
 
+
 from models.matching import Matching
 from models.utils import (compute_pose_error, compute_epipolar_error,
                           estimate_pose, estimate_pose_3d, estimate_scale, make_matching_plot,
@@ -67,12 +68,27 @@ from models.LGutils import load_image_LG
 
 torch.set_grad_enabled(False)
 
-MONTH = 'september'
+MONTH = 'march'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
 
 if __name__ == '__main__':
+    """ # Enable Stack Trace for warnings
+    import warnings
+    import traceback
+    import logging
+    _formatwarning = warnings.formatwarning
+
+    def formatwarning_tb(*args, **kwargs):
+        s = _formatwarning(*args, **kwargs)
+        tb = traceback.format_stack()
+        s += ''.join(tb[:-1])
+        return s
+
+    warnings.formatwarning = formatwarning_tb
+    logging.captureWarnings(True)
+    """
     parser = argparse.ArgumentParser(
         description='Image pair matching and pose evaluation with SuperGlue',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -98,7 +114,7 @@ if __name__ == '__main__':
         help='Keypoint extractor: superpoint,sfd2,sift,orb')
     parser.add_argument(
         '--matcher', type=str, default=f'superglue',
-        help='Descriptor matcher: superglue,lightglue, mnn')
+        help='Descriptor matcher: superglue,lightglue, nnm')
 
     parser.add_argument(
         '--max_length', type=int, default=-1,
@@ -213,6 +229,21 @@ if __name__ == '__main__':
             'nms_radius': opt.nms_radius,
             'keypoint_threshold': opt.keypoint_threshold,
             'max_keypoints': opt.max_keypoints
+        },
+        'sfd2': {
+            'model': {
+                'name': 'ressegnetv2',
+                'use_stability': True,
+                'max_keypoints': opt.max_keypoints,
+                'conf_th': 0.001,
+                'multiscale': False,
+                'scales': [1.0],
+            },
+            'preprocessing': {
+                'grayscale': False,
+                'resize_max': 1600
+            },
+            'keypoint_threshold': 0.001,# Same as conf_th
         },
         'superglue': {
             'weights': opt.superglue,
@@ -423,7 +454,7 @@ if __name__ == '__main__':
             matched_indexes0 = indexes0[valid_matches]  # Keypoints in image0 that have valid matches
             matched_indexes1 = matches[valid_matches]   # Corresponding keypoint indices in image1 from the matches
             matched_indexes1_labels = indexes1[matched_indexes1]  # Get labels of the matched keypoints in image1
-
+            print(matches,(matches != -1).sum())
             # True if both matched keypoints in image0 and image1 are in semantic (foreground) regions
             true_labels0 = matched_indexes0 >= 0
             true_labels1 = matched_indexes1_labels >= 0
@@ -567,8 +598,8 @@ if __name__ == '__main__':
                 text.append('Rotation: {}:{}'.format(rot0, rot1))
 
             # Display extra parameter info.
-            k_thresh = matching.superpoint.config['keypoint_threshold']
-            m_thresh = matching.superglue.config['match_threshold']
+            k_thresh = matching.extractor.config['keypoint_threshold']
+            m_thresh = matching.matcher.config['match_threshold']
             small_text = [
                 'Keypoint Threshold: {:.4f}'.format(k_thresh),
                 'Match Threshold: {:.2f}'.format(m_thresh),
@@ -600,8 +631,8 @@ if __name__ == '__main__':
                 text.append('Rotation: {}:{}'.format(rot0, rot1))
 
             # Display extra parameter info (only works with --fast_viz).
-            k_thresh = matching.superpoint.config['keypoint_threshold']
-            m_thresh = matching.superglue.config['match_threshold']
+            k_thresh = matching.extractor.config['keypoint_threshold']
+            m_thresh = matching.matcher.config['match_threshold']
             small_text = [
                 'Keypoint Threshold: {:.4f}'.format(k_thresh),
                 'Match Threshold: {:.2f}'.format(m_thresh),

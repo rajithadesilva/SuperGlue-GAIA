@@ -42,12 +42,12 @@
 import torch
 import numpy as np
 from .superpoint import SuperPoint
+from .sfd2 import SFD2
 from .orb_encoder import ORB
-from .sift_encoder import SIFT
-from .sift import SIFT
 from .superglue import SuperGlue
 from .lightglue import LightGlue
 from .mdgat import MDGAT
+from .nnm import NNM
 
 from .utils import DimSqueeze, concatenate_dictionaries, reconstruct_predictions
 
@@ -63,13 +63,15 @@ class Matching(torch.nn.Module):
         if self.extractor_type  == 'superpoint':
             self.extractor = SuperPoint(config.get('superpoint', {}))
         elif self.extractor_type  == 'sfd2':
-            self.extractor = ORB()
+            self.extractor = SFD2(config.get('sfd2', {}))
         elif self.extractor_type  == 'orb':
             self.extractor = ORB()
         elif self.extractor_type  == 'sift':
             if self.matcher_type == 'lightglue':
+                from .sift import SIFT
                 self.extractor = SIFT().eval().cuda()
             else:
+                from .sift_encoder import SIFT
                 self.extractor = SIFT()
         else:
             raise ValueError(f"Unknown extractor type: {config.get('extractor', {})}")
@@ -81,8 +83,8 @@ class Matching(torch.nn.Module):
             self.matcher = LightGlue(features=config.get('extractor', {})).eval().cuda()
         elif self.matcher_type== 'mdgat':
             self.matcher = MDGAT()
-        elif self.matcher_type == 'mnn':
-            self.matcher = MDGAT()
+        elif self.matcher_type == 'nnm':
+            self.matcher = NNM()
         else:
             raise ValueError(f"Unknown matcher type: {config.get('matcher', {})}")
 
@@ -96,15 +98,19 @@ class Matching(torch.nn.Module):
         
         # Extract SuperPoint (keypoints, scores, descriptors) if not provided
         if 'keypoints0' not in data:
-            if self.extractor_type in ['superpoint', 'sfd2']:
+            if self.extractor_type in ['superpoint']:
                 pred0 = self.extractor({'image': data['image0']}, sem_background0)
+            elif self.extractor_type in ['sfd2']:
+                pred0 = self.extractor({'image': data['rgb0']}, sem_background0)               
             else:
                 pred0 = self.extractor({'image': data['gs0']}, sem_background0)
             pred = {**pred, **{k+'0': v for k, v in pred0.items()}}
             
         if 'keypoints1' not in data:
-            if self.extractor_type in ['superpoint', 'sfd2']:
+            if self.extractor_type in ['superpoint']:
                 pred1 = self.extractor({'image': data['image1']}, sem_background1)
+            elif self.extractor_type in ['sfd2']:
+                pred1 = self.extractor({'image': data['rgb1']}, sem_background1) 
             else:
                 pred1 = self.extractor({'image': data['gs1']}, sem_background1)
             pred = {**pred, **{k+'1': v for k, v in pred1.items()}}
@@ -116,13 +122,33 @@ class Matching(torch.nn.Module):
             if isinstance(data[k], (list, tuple)):
                 data[k] = torch.stack(data[k])
 
+        # Perform the matching
+        if self.matcher_type == 'superglue':
+            pred = {**pred, **self.matcher(data)}
+        elif self.matcher_type == 'lightglue':
+            if self.extractor_type == 'sift':
+                data['scores0'] = data.pop('keypoint_scores0')
+                data['scores1'] = data.pop('keypoint_scores1') 
+                data['descriptors0'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0) 
+                data['descriptors1'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  
+            elif self.extractor_type == 'superpoint':
+                pred0['descriptors'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)
+                pred1['descriptors'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)
+            pred = {**pred,**self.matcher({'image0': pred0, 'image1': pred1})}
+        elif self.matcher_type == 'nnm':
+            pred = {**pred,**self.matcher(data)}
+        elif self.matcher_type == 'mdgat': # TODO: Verify
+            pred = {**pred,**self.matcher(data)}
+        else:
+            raise ValueError(f"Unknown matcher type: {self.matcher_type}")
+        
         #'''
         # Match all together
         #data['scores0'] = data.pop('keypoint_scores0') # For sift LG
         #data['scores1'] = data.pop('keypoint_scores1') # For siftn LG
         #data['descriptors0'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
         #data['descriptors1'] = pred1['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)  # For sift
-        pred = {**pred, **self.matcher(data)} 
+        #pred = {**pred, **self.matcher(data)} # SuperGlue
 
         # LightGlue with SuperPoint
         #pred0['descriptors'] = pred0['descriptors'].squeeze(0).transpose(0, 1).unsqueeze(0)
