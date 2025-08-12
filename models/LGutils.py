@@ -189,6 +189,7 @@ def read_image(path: Path, grayscale: bool = False) -> np.ndarray:
         raise FileNotFoundError(f"No image at path {path}.")
     mode = cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR
     image = cv2.imread(str(path), mode)
+    print(image.shape)
     if image is None:
         raise IOError(f"Could not read image at {path}.")
     if not grayscale:
@@ -232,8 +233,7 @@ def resize_image(
         "nearest": cv2.INTER_NEAREST,
         "area": cv2.INTER_AREA,
     }[interp]
-    return cv2.resize(image, (w_new, h_new), interpolation=mode), scale
-
+    return cv2.resize(image, (h_new, w_new), interpolation=mode), scale
 
 def load_image_LG(path: Path, resize: int = None, **kwargs) -> torch.Tensor:
     image = read_image(path)

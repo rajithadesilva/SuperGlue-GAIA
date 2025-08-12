@@ -13,8 +13,8 @@ class SFD2(torch.nn.Module):
         # Load model
         model_path = Path(__file__).parent / 'weights/sfd2.pth'
         self.model = ResSegNetV2(outdim=128, require_stability=self.config["model"]["use_stability"]).eval()
-        checkpoint = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint, strict=False)
+        checkpoint = torch.load(model_path, weights_only=False, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model'], strict=False)
         self.model.to(self.device)
 
         self.extractor = extract_resnet_return
@@ -28,7 +28,7 @@ class SFD2(torch.nn.Module):
 
         keypoints_np = keypoints.cpu().numpy()
         for keypoint in keypoints_np:
-            x, y = keypoint
+            y, x = keypoint
             min_distance = float('inf')
             nearest_mask_index = -1
 
@@ -51,7 +51,7 @@ class SFD2(torch.nn.Module):
     @torch.no_grad()
     def forward(self, data, masks=None):
         """ data: dict with key 'image' (Tensor of shape [1, 3, H, W]) """
-        img = data["image"].to(self.device)
+        img = data["image"].unsqueeze(0).to(self.device)
 
         pred = self.extractor(
             self.model,
@@ -61,7 +61,7 @@ class SFD2(torch.nn.Module):
             conf_th=self.config["model"]["conf_th"],
             scales=self.config["model"]["scales"],
         )
-
+        
         # Convert descriptors to match expected shape: [B, C, N]
         descriptors = pred["descriptors"].transpose(1, 0)
         descriptors = torch.tensor(descriptors, dtype=torch.float32, device=self.device)
@@ -69,6 +69,7 @@ class SFD2(torch.nn.Module):
         descriptors = descriptors.unsqueeze(0)  # [1, C, N]
 
         # Format keypoints (H, W -> X, Y) and score list
+        keypoints = pred["keypoints"].transpose(1, 0)
         keypoints = torch.tensor(pred["keypoints"], dtype=torch.float32)
         keypoints = torch.flip(keypoints, dims=[1]).unsqueeze(0)  # [1, N, 2]
         scores = torch.tensor(pred["scores"], dtype=torch.float32).unsqueeze(0)  # [1, N]

@@ -277,6 +277,15 @@ def process_resize(w, h, resize):
 
     return w_new, h_new
 
+def numpy_image_to_torch(image: np.ndarray) -> torch.Tensor:
+    """Normalize the image tensor and reorder the dimensions."""
+    if image.ndim == 3:
+        image = image.transpose((2, 0, 1))  # HxWxC to CxHxW
+    elif image.ndim == 2:
+        image = image[None]  # add channel axis
+    else:
+        raise ValueError(f"Not an image: {image.shape}")
+    return torch.tensor(image / 255.0, dtype=torch.float)
 
 def frame2tensor(frame, device):
     return torch.from_numpy(frame/255.).float()[None, None].to(device)
@@ -324,6 +333,14 @@ def read_image(path, device, resize, rotation, resize_float):
     inp = frame2tensor(image, device)
     return image, inp, scales
 
+def load_image_SFD2(path: Path, resize: int = None, **kwargs) -> torch.Tensor:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = image.astype(np.float32)
+    image = image[:, :, ::-1]  # BGR to RGB
+    image = image.astype(np.float32)
+    if resize is not None:
+        image = cv2.resize(image, (resize[0], resize[1]), interpolation=cv2.INTER_CUBIC)
+    return numpy_image_to_torch(image)
 
 # --- GEOMETRY ---
 

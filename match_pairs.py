@@ -56,19 +56,19 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from sklearn.metrics import confusion_matrix
-
+import os
 
 from models.matching import Matching
 from models.utils import (compute_pose_error, compute_epipolar_error,
                           estimate_pose, estimate_pose_3d, estimate_scale, make_matching_plot,
                           error_colormap, AverageTimer, pose_auc, plot_3d_vectors, read_image, read_rgb_image,
                           rotate_intrinsics, rotate_pose_inplane,
-                          scale_intrinsics, frame2tensor,project_images, compute_sem_match_stat)
+                          scale_intrinsics, frame2tensor,project_images, compute_sem_match_stat, load_image_SFD2)
 from models.LGutils import load_image_LG
 
 torch.set_grad_enabled(False)
 
-MONTH = 'march'
+MONTH = 'april'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
@@ -132,7 +132,7 @@ if __name__ == '__main__':
         '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
-        '--max_keypoints', type=int, default=-1,
+        '--max_keypoints', type=int, default=4096,
         help='Maximum number of keypoints detected by Superpoint'
              ' (\'-1\' keeps all keypoints)')
     parser.add_argument(
@@ -231,6 +231,7 @@ if __name__ == '__main__':
             'max_keypoints': opt.max_keypoints
         },
         'sfd2': {
+            'output': 'sfd2_features',
             'model': {
                 'name': 'ressegnetv2',
                 'use_stability': True,
@@ -238,17 +239,36 @@ if __name__ == '__main__':
                 'conf_th': 0.001,
                 'multiscale': False,
                 'scales': [1.0],
+                'model_fn': os.path.join(os.getcwd(), "models/weights/sfd2.pth"),
             },
             'preprocessing': {
                 'grayscale': False,
-                'resize_max': 1600
+                'resize_max': 640,
             },
-            'keypoint_threshold': 0.001,# Same as conf_th
+            'matcher': {
+                'output': 'NNM',
+                'model': {
+                    'name': 'nearest_neighbor',
+                    'do_mutual_check': True,
+                    'distance_threshold': None,
+                    'match_threshold': 0.0, #Dummy value
+                },
+            },
+            'keypoint_threshold': 0.001# Same as conf_th
         },
         'superglue': {
             'weights': opt.superglue,
             'sinkhorn_iterations': opt.sinkhorn_iterations,
             'match_threshold': opt.match_threshold,
+        },
+        'NNM': {
+                'output': 'NNM',
+                'model': {
+                    'name': 'nearest_neighbor',
+                    'do_mutual_check': True,
+                    'distance_threshold': None,
+                    'match_threshold': 0.0, #Dummy value
+                },
         }
     }
     matching = Matching(config).eval().to(device)
@@ -386,8 +406,16 @@ if __name__ == '__main__':
             input_dir / name1, device, opt.resize, rot1, opt.resize_float)
         
         # Load image pair for lightglue SIFT
-        rgb0 = load_image_LG(input_dir / name0, opt.resize).cuda()
-        rgb1 = load_image_LG(input_dir / name1,opt.resize).cuda()
+        if opt.matcher == 'lightglue':
+            rgb0 = load_image_LG(input_dir / name0, opt.resize).cuda()
+            rgb1 = load_image_LG(input_dir / name1,opt.resize).cuda()
+        elif opt.matcher == 'nnm':
+            rgb0 = load_image_SFD2(input_dir / name0, opt.resize).cuda()
+            rgb1 = load_image_SFD2(input_dir / name1,opt.resize).cuda()
+        else:
+            rgb0 = None
+            rgb1 = None
+
         
         if image0 is None or image1 is None:
             print('Problem reading image pair: {} {}'.format(
@@ -454,7 +482,6 @@ if __name__ == '__main__':
             matched_indexes0 = indexes0[valid_matches]  # Keypoints in image0 that have valid matches
             matched_indexes1 = matches[valid_matches]   # Corresponding keypoint indices in image1 from the matches
             matched_indexes1_labels = indexes1[matched_indexes1]  # Get labels of the matched keypoints in image1
-            print(matches,(matches != -1).sum())
             # True if both matched keypoints in image0 and image1 are in semantic (foreground) regions
             true_labels0 = matched_indexes0 >= 0
             true_labels1 = matched_indexes1_labels >= 0

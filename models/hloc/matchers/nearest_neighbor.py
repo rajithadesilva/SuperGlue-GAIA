@@ -33,6 +33,7 @@ class NearestNeighbor(BaseModel):
     required_inputs = ['descriptors0', 'descriptors1']
 
     def _init(self, conf):
+        self.config = {'match_threshold': 0.0,}
         pass
 
     def _forward(self, data):
@@ -40,9 +41,9 @@ class NearestNeighbor(BaseModel):
             'bdn,bdm->bnm', data['descriptors0'], data['descriptors1'])
         matches0, scores0 = find_nn(
             sim, self.conf['ratio_threshold'], self.conf['distance_threshold'])
-        # matches1, scores1 = find_nn(
-        #     sim.transpose(1, 2), self.conf['ratio_threshold'],
-        #     self.conf['distance_threshold'])
+        matches1, scores1 = find_nn(
+            sim.transpose(1, 2), self.conf['ratio_threshold'],
+            self.conf['distance_threshold'])
         if self.conf['do_mutual_check']:
             # print("with mutual check")
             matches1, scores1 = find_nn(
@@ -54,4 +55,6 @@ class NearestNeighbor(BaseModel):
         return {
             'matches0': matches0,
             'matching_scores0': scores0,
+            'matches1': matches0,
+            'matching_scores1': scores1,
         }

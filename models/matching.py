@@ -47,7 +47,9 @@ from .orb_encoder import ORB
 from .superglue import SuperGlue
 from .lightglue import LightGlue
 from .mdgat import MDGAT
-from .nnm import NNM
+
+from .hloc.utils.base_model import dynamic_load
+import models.hloc.matchers as matchers
 
 from .utils import DimSqueeze, concatenate_dictionaries, reconstruct_predictions
 
@@ -84,7 +86,9 @@ class Matching(torch.nn.Module):
         elif self.matcher_type== 'mdgat':
             self.matcher = MDGAT()
         elif self.matcher_type == 'nnm':
-            self.matcher = NNM()
+            model = config.get('NNM', {}).get('model', {})
+            base_model = dynamic_load(matchers, model.get('name'))
+            self.matcher = base_model(model).eval().cuda()
         else:
             raise ValueError(f"Unknown matcher type: {config.get('matcher', {})}")
 
