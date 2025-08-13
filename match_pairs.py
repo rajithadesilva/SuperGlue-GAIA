@@ -115,6 +115,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--matcher', type=str, default=f'superglue',
         help='Descriptor matcher: superglue,lightglue, nnm')
+    parser.add_argument(
+        '--ksi', action='store_true',
+        help='Enable Keypoint Semantic Integration')
 
     parser.add_argument(
         '--max_length', type=int, default=-1,
@@ -228,7 +231,8 @@ if __name__ == '__main__':
         'superpoint': {
             'nms_radius': opt.nms_radius,
             'keypoint_threshold': opt.keypoint_threshold,
-            'max_keypoints': opt.max_keypoints
+            'max_keypoints': opt.max_keypoints,
+            'ksi': opt.ksi
         },
         'sfd2': {
             'output': 'sfd2_features',
@@ -254,6 +258,7 @@ if __name__ == '__main__':
                     'match_threshold': 0.0, #Dummy value
                 },
             },
+            'ksi': opt.ksi,
             'keypoint_threshold': 0.001# Same as conf_th
         },
         'superglue': {

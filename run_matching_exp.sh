@@ -10,7 +10,7 @@ months2=("march" "april" "may" "june" "september")
 #descriptor1="64N-192U-FN"
 #descriptor="branching-semantic-keypoint-other"
 #descriptor2="U-256U-256N-FN-SIFT"
-descriptor2="baseline-sfd2"
+descriptor2="baseline-sfd2-ksi"
 
 # Loop over each month and run the command for the first descriptor
 #for month in "${months1[@]}"

@@ -3,13 +3,15 @@ import numpy as np
 from pathlib import Path
 from models.sfd2_nets.sfd2 import ResSegNetV2
 from models.sfd2_nets.extractor import extract_resnet_return
+from .ksi_encoders import EncoderDecoder, Encoder
 
 class SFD2(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.ENCDIM = 128
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        
         # Load model
         model_path = Path(__file__).parent / 'weights/sfd2.pth'
         self.model = ResSegNetV2(outdim=128, require_stability=self.config["model"]["use_stability"]).eval()
@@ -19,6 +21,15 @@ class SFD2(torch.nn.Module):
 
         self.extractor = extract_resnet_return
         print("Loaded SFD2 model.")
+
+        self.encdec = EncoderDecoder(self.ENCDIM)
+        self.encdec.load_state_dict(torch.load(f'./models/weights/{self.ENCDIM}_BN.pth'))
+        self.encdec.to(self.device)
+
+        self.semenc = Encoder(self.ENCDIM).to(self.device)
+        self.semenc.encoder.load_state_dict(self.encdec.encoder.state_dict())
+
+        print('Loaded Semantic Encoder model')
 
     def find_nearest_masks_for_keypoints(self, masks, keypoints, threshold=2.0):
         """ masks: [N, H, W] numpy arrays; keypoints: [N, 2] torch tensor """
@@ -73,11 +84,42 @@ class SFD2(torch.nn.Module):
         keypoints = torch.tensor(pred["keypoints"], dtype=torch.float32)
         keypoints = torch.flip(keypoints, dims=[1]).unsqueeze(0)  # [1, N, 2]
         scores = torch.tensor(pred["scores"], dtype=torch.float32).unsqueeze(0)  # [1, N]
+        
+        if self.config["ksi"]:
+            if masks is not None:
+                mask_indexes = self.find_nearest_masks_for_keypoints(masks, keypoints[0])
 
-        if masks is not None:
-            mask_indexes = self.find_nearest_masks_for_keypoints(masks, keypoints[0])
+                bottleneck_vectors = []
+                for mask in masks:
+                    sem_background = torch.tensor(mask, dtype=torch.float32).to(self.device)
+                    sem_background = torch.nn.functional.interpolate(
+                                        sem_background.unsqueeze(0).unsqueeze(0),
+                                        size=(128, 128),
+                                        mode='bilinear',
+                                        align_corners=False
+                                    )
+                    encoded = self.semenc(sem_background)
+                    #encoded = torch.nn.functional.normalize(encoded, p=2, dim=0)
+                    bottleneck_vector = (encoded.cpu().numpy())
+                    bottleneck_vectors.append(bottleneck_vector[0])
+
+                semantic_descriptors = []
+                for idx, desc in enumerate(descriptors[0].T):
+                    if mask_indexes[idx]>= 0:
+                        semantic_descriptors.append(desc.cpu().numpy()+bottleneck_vectors[mask_indexes[idx]])
+                    else:
+                        semantic_descriptors.append(desc.cpu().numpy())
+            else:
+                mask_indexes = torch.full((keypoints.shape[1],), -1, dtype=torch.int64, device=self.device)
         else:
-            mask_indexes = torch.full((keypoints.shape[1],), -1, dtype=torch.int64, device=self.device)
+            semantic_descriptors = descriptors[0].T.cpu().numpy()
+            if masks is not None:
+                mask_indexes = self.find_nearest_masks_for_keypoints(masks, keypoints[0])
+            else:
+                mask_indexes = torch.full((keypoints.shape[1],), -1, dtype=torch.int64, device=self.device)
+        descriptors = np.array(semantic_descriptors,np.float32)
+        descriptors = torch.tensor(descriptors, dtype=torch.float32).to(self.device).T.unsqueeze(0)
+        descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
 
         return {
             "keypoints": keypoints.to(self.device),
