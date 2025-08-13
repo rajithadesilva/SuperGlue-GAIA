@@ -110,6 +110,7 @@ class SFD2(torch.nn.Module):
                     else:
                         semantic_descriptors.append(desc.cpu().numpy())
             else:
+                semantic_descriptors = descriptors[0].T.cpu().numpy()
                 mask_indexes = torch.full((keypoints.shape[1],), -1, dtype=torch.int64, device=self.device)
         else:
             semantic_descriptors = descriptors[0].T.cpu().numpy()
