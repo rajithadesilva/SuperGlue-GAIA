@@ -52,6 +52,7 @@ import matplotlib.cm as cm
 import torch
 import cv2
 from ultralytics import YOLO
+from models.perceptree import PercepTree
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -68,7 +69,7 @@ from models.LGutils import load_image_LG
 
 torch.set_grad_enabled(False)
 
-MONTH = 'april'
+MONTH = 'woodland'
 DESC = 'U-256U-256N-FN-SIFT'
 #DESC = 'baseline-SIFT-SG'
 TYPE = 'long'
@@ -135,7 +136,7 @@ if __name__ == '__main__':
         '--superglue', choices={'indoor', 'outdoor'}, default='outdoor',
         help='SuperGlue weights')
     parser.add_argument(
-        '--max_keypoints', type=int, default=4096,
+        '--max_keypoints', type=int, default=-1,
         help='Maximum number of keypoints detected by Superpoint'
              ' (\'-1\' keeps all keypoints)')
     parser.add_argument(
@@ -183,12 +184,12 @@ if __name__ == '__main__':
 
     opt = parser.parse_args()
     print(opt)
-
+    
     if opt.month:
         opt.input_pairs = f'assets/{TYPE}/{opt.month}_test_pairs_gt.txt'
         opt.input_dir = f'assets/{TYPE}/{opt.month}/rgb/'
         opt.output_dir = f'dump_match_pairs/{opt.desc}/{opt.month}'
-
+    
     assert not (opt.opencv_display and not opt.viz), 'Must use --viz with --opencv_display'
     assert not (opt.opencv_display and not opt.fast_viz), 'Cannot use --opencv_display without --fast_viz'
     assert not (opt.fast_viz and not opt.viz), 'Must use --viz with --fast_viz'
@@ -291,7 +292,10 @@ if __name__ == '__main__':
         print('Will write visualization images to',
               'directory \"{}\"'.format(output_dir))
 
+    # Pick your panoptic segmentation model
     yolo = YOLO("./models/weights/yolo.pt").to(device)
+    #perceptree = PercepTree(weights_path="./models/weights/ResNext-101_fold_01.pth", score_thresh=0.7)
+
     timer = AverageTimer(newline=True)
     epis = []
 
@@ -438,6 +442,7 @@ if __name__ == '__main__':
             yoloimg = cv2.imread(str(input_dir / name0))
             yoloimg = cv2.resize(yoloimg, (640, 640))
             result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False)
+            #result = perceptree.predict(yoloimg, conf=0.7, classes=None, verbose=False)
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = result[0].masks.data.cpu().numpy()
@@ -452,6 +457,7 @@ if __name__ == '__main__':
             yoloimg = cv2.imread(str(input_dir / name1))
             yoloimg = cv2.resize(yoloimg, (640, 640))
             result = yolo.predict(yoloimg,conf=0.2, classes=[0,4], verbose=False) 
+            #result = perceptree.predict(yoloimg, conf=0.7, classes=None, verbose=False)
             # 0-Building 1-Pipe 2-Pole 3-Robot 4-Trunk 5-Vehicle
             if result[0].masks is not None:
                 masks = result[0].masks.data.cpu().numpy()
@@ -696,7 +702,7 @@ if __name__ == '__main__':
     }
     df = pd.DataFrame(data)
     # Save the DataFrame as a CSV file
-    csv_filename = f'{opt.month}_{opt.desc}_semantic_match_statistics.csv'
+    csv_filename = f'{os.path.dirname(opt.output_dir)}/{opt.month}_{opt.desc}_semantic_match_statistics.csv'
     df.to_csv(csv_filename, index=False)
 
     #'''
